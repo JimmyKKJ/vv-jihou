@@ -1,23 +1,23 @@
-# Raspberry Pi セットアップ手順
+# セットアップ手順
 
-対象: jimbase-station (Raspberry Pi 3 Model A+, Debian GNU/Linux 13 trixie)、
-スピーカーは3.5mmヘッドホン出力(`aplay -l` で `card 0: Headphones` として認識済み)。
+対象: Raspberry Pi(または`aplay`が使える他のLinux機、Debian/Raspberry Pi OS系を想定)+
+スピーカー。事前に `aplay -l` でスピーカーが再生デバイスとして認識されていることを
+確認しておく(3.5mmヘッドホン出力・USBオーディオいずれでも、`aplay`から鳴らせれば動く)。
 
-## 1. リポジトリの配置
-
-`life` リポジトリの `vv-jihou/` submoduleとして管理しているため、Pi側では
-このリポジトリ単体をcloneして使う(life全体を同期する必要はない)。
+## 1. リポジトリの取得
 
 ```
 git clone https://github.com/<owner>/vv-jihou.git ~/vv-jihou
+cd ~/vv-jihou
 ```
 
 ## 2. Python環境(venv)
 
-Debian trixieはPEP668によりsystem pipへの直接installを拒否するため、専用venvを作る。
+Debian trixie以降はPEP668によりsystem pipへの直接installを拒否するため、専用venvを作る
+(古いRaspberry Pi OSでは venv なしの直接pip installでも動く場合があるが、環境を汚さない
+ため venv を推奨)。
 
 ```
-cd ~/vv-jihou
 python3 -m venv .venv
 .venv/bin/pip install jpholiday
 ```
@@ -33,11 +33,11 @@ python3 -m venv .venv
 
 ## 4. cron登録
 
-`crontab -e` で以下を追加(パスは実際のclone先に合わせる):
+`crontab -e` で以下を追加(パスは実際のclone先・ユーザー名に合わせて書き換える):
 
 ```
-*/5 * * * * /home/jimmy-kkj/vv-jihou/.venv/bin/python /home/jimmy-kkj/vv-jihou/bin/jihou_chime.py
-@reboot sleep 30 && /usr/bin/aplay -q /home/jimmy-kkj/vv-jihou/audio/system/startup.wav && /usr/bin/aplay -q /home/jimmy-kkj/vv-jihou/audio/system/voice_intro.wav
+*/5 * * * * /path/to/vv-jihou/.venv/bin/python /path/to/vv-jihou/bin/jihou_chime.py
+@reboot sleep 30 && /usr/bin/aplay -q /path/to/vv-jihou/audio/system/startup.wav && /usr/bin/aplay -q /path/to/vv-jihou/audio/system/voice_intro.wav
 ```
 
 (`@reboot` の `sleep 30` はオーディオデバイスの初期化待ち)
