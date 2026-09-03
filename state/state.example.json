@@ -1,0 +1,7 @@
+{
+  "enabled": false,
+  "interval_minutes": 15,
+  "active_start": "06:30",
+  "active_end": "23:00",
+  "paused_until": null
+}
