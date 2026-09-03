@@ -40,6 +40,9 @@ from jihou_common import (
 def cmd_on(args):
     state = load_state()
     state["enabled"] = True
+    # 一時停止を取り消す明示的なCLIがないため、onは有効化と同時に
+    # paused_untilもクリアする。これにより長時間の一時停止後でも手動で再開できる。
+    state["paused_until"] = None
     save_state(state)
     log("on: 時報を有効化")
     play_sequence([audio_path("system", "on.wav")])

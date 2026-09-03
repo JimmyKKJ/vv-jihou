@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -29,14 +30,15 @@ ALLOWED_PAUSE_HOURS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 24, 48]
 
 
 def _valid_hhmm(value):
-    if not isinstance(value, str):
+    """state.json 内の時刻がCLIと同じHH:MM・5分刻みの制約を満たすか返す。"""
+    if not isinstance(value, str) or re.fullmatch(r"\d{2}:\d{2}", value) is None:
         return False
     try:
         h, m = value.split(":")
         h, m = int(h), int(m)
     except ValueError:
         return False
-    return 0 <= h <= 23 and 0 <= m <= 59
+    return 0 <= h <= 23 and 0 <= m <= 59 and m % 5 == 0
 
 
 def sanitize_state(state):
