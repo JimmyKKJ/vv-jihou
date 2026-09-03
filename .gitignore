@@ -1,0 +1,6 @@
+state/jihou.log
+__pycache__/
+*.pyc
+.venv/
+state/state.json
+state/.state.lock
