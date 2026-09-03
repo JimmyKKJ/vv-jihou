@@ -81,7 +81,7 @@ python bin/jihou_chime.py --at 07:00
 # 0時を含めておく必要がある(既定は06:30〜23:00のため、そのままでは無音になる)
 python bin/jihou_ctl.py window --start 00:00 --end 23:55
 python bin/jihou_chime.py --at 2026-09-22T00:00
-python bin/jihou_ctl.py window --start 07:00 --end 22:00  # 確認後は元に戻す
+python bin/jihou_ctl.py window --start 06:30 --end 23:00  # 確認後は既定値(06:30〜23:00)に戻す
 ```
 
 Raspberry Pi実機でのセットアップ手順は [`install/README.md`](install/README.md) を参照。
