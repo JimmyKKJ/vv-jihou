@@ -33,6 +33,7 @@ from jihou_common import (
     parse_hhmm,
     play_sequence,
     save_state,
+    state_lock,
 )
 
 
@@ -231,7 +232,10 @@ def main():
         parser.print_help()
         sys.exit(1)
     try:
-        args.func(args)
+        # state.jsonの読み込み〜保存を、cron(jihou_chime.py)側の同時実行から
+        # ロックで守る(片方の変更が消える・読み込み中の内容が壊れるのを防ぐ)。
+        with state_lock():
+            args.func(args)
     except FileNotFoundError as e:
         print(f"エラー: {e}", file=sys.stderr)
         sys.exit(1)

@@ -1,5 +1,7 @@
 """vv-jihou の共通ユーティリティ(state.json の読み書き・音声再生・パス解決)。"""
 
+import contextlib
+import fcntl
 import json
 import os
 import subprocess
@@ -10,6 +12,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIO_DIR = os.path.join(REPO_ROOT, "audio")
 STATE_PATH = os.path.join(REPO_ROOT, "state", "state.json")
 LOG_PATH = os.path.join(REPO_ROOT, "state", "jihou.log")
+LOCK_PATH = os.path.join(REPO_ROOT, "state", ".state.lock")
 
 DEFAULT_STATE = {
     "enabled": False,
@@ -83,6 +86,21 @@ def sanitize_state(state):
     return state, changed
 
 
+@contextlib.contextmanager
+def state_lock():
+    """state.json読み書きの排他制御。cron(jihou_chime.py)と手動操作(jihou_ctl.py)が
+    同時に動いても、片方の変更が消える(lost update)・読み込み中の内容が壊れる、
+    といった競合を防ぐ。呼び出し側は load_state()〜save_state() までをこの中で行うこと。
+    """
+    os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
+    with open(LOCK_PATH, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
 def load_state():
     if not os.path.exists(STATE_PATH):
         return dict(DEFAULT_STATE)
@@ -106,10 +124,16 @@ def load_state():
 
 
 def save_state(state):
+    """一時ファイルに書いてから置き換える(電源断等で書き込み途中のファイルが
+    残ってstate.jsonが壊れることを防ぐ、os.replaceは同一ファイルシステム内で原子的)。"""
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    with open(STATE_PATH, "w", encoding="utf-8") as f:
+    tmp_path = STATE_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
         f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, STATE_PATH)
 
 
 def log(message):

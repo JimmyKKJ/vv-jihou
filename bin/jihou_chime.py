@@ -22,6 +22,7 @@ from jihou_common import (
     play_error,
     play_sequence,
     save_state,
+    state_lock,
 )
 
 WEEKDAY_FILES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -114,17 +115,20 @@ def main():
         sys.exit(1)
 
     try:
-        state = load_state()
+        # jihou_ctl.py側の手動操作と同時に走ってもstate.jsonが競合しないよう、
+        # 読み込み〜(必要なら)paused_untilクリアの保存までをロックで囲む。
+        with state_lock():
+            state = load_state()
 
-        if not state["enabled"]:
-            return
-
-        if state["paused_until"]:
-            paused_until = datetime.fromisoformat(state["paused_until"])
-            if now < paused_until:
+            if not state["enabled"]:
                 return
-            state["paused_until"] = None
-            save_state(state)
+
+            if state["paused_until"]:
+                paused_until = datetime.fromisoformat(state["paused_until"])
+                if now < paused_until:
+                    return
+                state["paused_until"] = None
+                save_state(state)
 
         start_h, start_m = map(int, state["active_start"].split(":"))
         end_h, end_m = map(int, state["active_end"].split(":"))
