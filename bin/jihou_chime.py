@@ -114,6 +114,11 @@ def main():
         print(f"エラー: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # --atはあくまで動作確認用のシミュレーションのため、本番のstate.jsonを
+    # 書き換えない(paused_untilのクリア等、状態を変更する保存は実時刻での
+    # 実行〈cronからの本来の起動〉時のみ行う)。
+    is_simulation = args.at is not None
+
     try:
         # jihou_ctl.py側の手動操作と同時に走ってもstate.jsonが競合しないよう、
         # 読み込み〜(必要なら)paused_untilクリアの保存までをロックで囲む。
@@ -124,11 +129,14 @@ def main():
                 return
 
             if state["paused_until"]:
+                # load_state()内のsanitize_state()がtz付き等の不正な値を既に
+                # 除去しているため、ここでは常にnaive(ローカル時刻)の値が入っている。
                 paused_until = datetime.fromisoformat(state["paused_until"])
                 if now < paused_until:
                     return
-                state["paused_until"] = None
-                save_state(state)
+                if not is_simulation:
+                    state["paused_until"] = None
+                    save_state(state)
 
         start_h, start_m = map(int, state["active_start"].split(":"))
         end_h, end_m = map(int, state["active_end"].split(":"))

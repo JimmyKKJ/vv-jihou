@@ -72,11 +72,18 @@ def sanitize_state(state):
     paused_until = state.get("paused_until")
     if paused_until is not None:
         try:
-            datetime.fromisoformat(paused_until)
+            parsed_paused_until = datetime.fromisoformat(paused_until)
         except (TypeError, ValueError):
             log(f"警告: paused_untilの値が不正なためクリアします(元の値: {paused_until!r})")
             state["paused_until"] = None
             changed = True
+        else:
+            if parsed_paused_until.tzinfo is not None:
+                # 内部では常にnaive(タイムゾーン無し、ローカル時刻)で扱う規約のため、
+                # tz付きの値はdatetime.now()との比較でTypeErrorになり続けてしまう。
+                log(f"警告: paused_untilにタイムゾーン情報が含まれていたためクリアします(元の値: {paused_until!r})")
+                state["paused_until"] = None
+                changed = True
 
     if not isinstance(state.get("enabled"), bool):
         log(f"警告: enabledの値が不正なためFalseに修復します(元の値: {state.get('enabled')!r})")
