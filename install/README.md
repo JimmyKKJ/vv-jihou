@@ -7,11 +7,20 @@
 ## 1. リポジトリの取得
 
 ```
-git clone https://github.com/<owner>/vv-jihou.git ~/vv-jihou
+git clone https://github.com/JimmyKKJ/vv-jihou.git ~/vv-jihou
 cd ~/vv-jihou
 ```
 
-## 2. Python環境(venv)
+## 2. 初期状態ファイルの用意
+
+`state/state.json`は実行時に書き換わる状態ファイルのためgit管理対象外(.gitignore)にしている。
+テンプレート(`state/state.example.json`)からコピーして作る。
+
+```
+cp state/state.example.json state/state.json
+```
+
+## 3. Python環境(venv)
 
 Debian trixie以降はPEP668によりsystem pipへの直接installを拒否するため、専用venvを作る
 (古いRaspberry Pi OSでは venv なしの直接pip installでも動く場合があるが、環境を汚さない
@@ -22,7 +31,7 @@ python3 -m venv .venv
 .venv/bin/pip install jpholiday
 ```
 
-## 3. 動作確認
+## 4. 動作確認
 
 ```
 .venv/bin/python bin/jihou_ctl.py --help
@@ -31,7 +40,7 @@ python3 -m venv .venv
 .venv/bin/python bin/jihou_chime.py --at 07:00
 ```
 
-## 4. cron登録
+## 5. cron登録
 
 `crontab -e` で以下を追加(パスは実際のclone先・ユーザー名に合わせて書き換える):
 
@@ -42,7 +51,7 @@ python3 -m venv .venv
 
 (`@reboot` の `sleep 30` はオーディオデバイスの初期化待ち)
 
-## 5. 制御コマンド例
+## 6. 制御コマンド例
 
 ```
 .venv/bin/python bin/jihou_ctl.py off

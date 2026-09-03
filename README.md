@@ -15,7 +15,8 @@ VOICEVOX(キャラクター「春日部つむぎ」)で生成した音声パー�
 - `bin/jihou_ctl.py` — オン/オフ・頻度設定・一時停止・稼働時間帯設定のCLI(`--help`対応)
 - `bin/jihou_chime.py` — cronから定期実行し、鳴らすべきタイミングか判定して再生する
 - `bin/jihou_common.py` — 共通ユーティリティ(state.json読み書き・音声再生・パス解決)
-- `state/state.json` — 現在の設定(有効/無効・頻度・稼働時間帯・一時停止状態)
+- `state/state.example.json` — 初期設定のテンプレート(実行時に書き換わる`state/state.json`は
+  git管理対象外。セットアップ時にこのテンプレートをコピーして使う)
 - `install/README.md` — Raspberry Pi側のセットアップ手順(venv・cron登録)
 
 ## 時報の仕様
