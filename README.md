@@ -85,3 +85,17 @@ python bin/jihou_ctl.py window --start 06:30 --end 23:00  # 確認後は既定�
 ```
 
 Raspberry Pi実機でのセットアップ手順は [`install/README.md`](install/README.md) を参照。
+
+## ライセンス
+
+コード(`bin/`以下等)は[MITライセンス](LICENSE)。
+
+`audio/`配下の音声データはVOICEVOX(キャラクター「春日部つむぎ」)で生成したもので、
+別途VOICEVOXおよびキャラクター利用規約が適用される。利用にあたっては以下のクレジット
+表記が必要:
+
+> VOICEVOX:春日部つむぎ
+
+商用・非商用問わず利用可能だが、誹謗中傷目的や公式イラストを使った商品化等は禁止されて
+いる。詳細・最新情報は[春日部つむぎ公式HP・利用規約](https://tsukushinyoki10.wixsite.com/ktsumugiofficial/%E5%88%A9%E7%94%A8%E8%A6%8F%E7%B4%84)・
+[VOICEVOX公式サイト](https://voicevox.hiroshiba.jp/)を必ず確認すること。

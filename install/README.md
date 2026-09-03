@@ -3,6 +3,8 @@
 対象: Raspberry Pi(または`aplay`が使える他のLinux機、Debian/Raspberry Pi OS系を想定)+
 スピーカー。事前に `aplay -l` でスピーカーが再生デバイスとして認識されていることを
 確認しておく(3.5mmヘッドホン出力・USBオーディオいずれでも、`aplay`から鳴らせれば動く)。
+Python 3.7以降であれば動作する見込み(f-string等の標準機能のみ使用。実際の動作確認は
+Python 3.14で実施、Raspberry Pi実機での確認はまだ)。
 
 ## 1. リポジトリの取得
 
@@ -31,7 +33,7 @@ Debian 12(bookworm)・13(trixie)以降はPEP668によりsystem pipへの直接in
 ```
 sudo apt install -y python3-venv   # 未インストールの場合のみ
 python3 -m venv .venv
-.venv/bin/pip install jpholiday
+.venv/bin/pip install -r requirements.txt
 ```
 
 ## 4. 動作確認
