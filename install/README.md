@@ -22,7 +22,8 @@ cp state/state.example.json state/state.json
 
 ## 3. Python環境(venv)
 
-Debian trixie以降はPEP668によりsystem pipへの直接installを拒否するため、専用venvを作る
+Debian 12(bookworm)・13(trixie)以降はPEP668によりsystem pipへの直接installを拒否するため、
+専用venvを作る
 (古いRaspberry Pi OSでは venv なしの直接pip installでも動く場合があるが、環境を汚さない
 ため venv を推奨)。`venv`モジュールはDebian/Raspberry Pi OSの素の状態では入っておらず
 別パッケージ(`python3-venv`)が必要なため、無ければ先にインストールする。
