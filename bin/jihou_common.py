@@ -171,8 +171,10 @@ def play_sequence(paths):
     for path in paths:
         try:
             subprocess.run(["aplay", "-q", path], check=True)
-        except FileNotFoundError as e:
-            raise PlaybackError(f"aplayコマンドが見つかりません: {e}") from e
+        except OSError as e:
+            # FileNotFoundError(aplayが無い)・PermissionError(実行権限が無い)・
+            # その他exec失敗系のOSErrorをまとめて扱う。
+            raise PlaybackError(f"aplayの実行に失敗しました: {e}") from e
         except subprocess.CalledProcessError as e:
             raise PlaybackError(f"再生に失敗しました({path}): {e}") from e
 
@@ -180,7 +182,9 @@ def play_sequence(paths):
 def play_error():
     try:
         subprocess.run(["aplay", "-q", audio_path("system", "error.wav")], check=False)
-    except FileNotFoundError:
+    except OSError:
+        # ここでの失敗はベストエフォート(エラー音を鳴らそうとしただけ)のため、
+        # さらに上位へ例外を伝播させない(OSErrorはFileNotFoundError等を含む)。
         pass
 
 

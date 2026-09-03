@@ -3,8 +3,9 @@
 対象: Raspberry Pi(または`aplay`が使える他のLinux機、Debian/Raspberry Pi OS系を想定)+
 スピーカー。事前に `aplay -l` でスピーカーが再生デバイスとして認識されていることを
 確認しておく(3.5mmヘッドホン出力・USBオーディオいずれでも、`aplay`から鳴らせれば動く)。
-Python 3.7以降であれば動作する見込み(f-string等の標準機能のみ使用。実際の動作確認は
-Python 3.14で実施、Raspberry Pi実機での確認はまだ)。
+**Python 3.9以降が必須**(依存する`jpholiday`パッケージがPython 3.9以上を要求するため。
+コード自体はf-string等の標準機能のみ使用。実際の動作確認はPython 3.14で実施、
+Raspberry Pi実機での確認はまだ)。
 
 ## 1. リポジトリの取得
 
