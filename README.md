@@ -76,7 +76,12 @@ python bin/jihou_chime.py
 
 # 動作確認用(指定時刻・日時で判定)
 python bin/jihou_chime.py --at 07:00
+
+# 0時の日付アナウンス(祝日/国民の休日パターン)を確認する場合は、稼働時間帯に
+# 0時を含めておく必要がある(既定は06:30〜23:00のため、そのままでは無音になる)
+python bin/jihou_ctl.py window --start 00:00 --end 23:55
 python bin/jihou_chime.py --at 2026-09-22T00:00
+python bin/jihou_ctl.py window --start 07:00 --end 22:00  # 確認後は元に戻す
 ```
 
 Raspberry Pi実機でのセットアップ手順は [`install/README.md`](install/README.md) を参照。
