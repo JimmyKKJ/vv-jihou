@@ -25,13 +25,83 @@ ALLOWED_INTERVAL_HOURS = [1, 2, 3, 6, 12]
 ALLOWED_PAUSE_HOURS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 24, 48]
 
 
+def _valid_hhmm(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        h, m = value.split(":")
+        h, m = int(h), int(m)
+    except ValueError:
+        return False
+    return 0 <= h <= 23 and 0 <= m <= 59
+
+
+def sanitize_state(state):
+    """壊れた/手編集で不正になったstateを既定値へ自動修復する。戻り値は(state, 修復したか)。"""
+    changed = False
+
+    allowed_intervals = {m for m in ALLOWED_INTERVAL_MINUTES} | {h * 60 for h in ALLOWED_INTERVAL_HOURS}
+    if state.get("interval_minutes") not in allowed_intervals:
+        log(f"警告: interval_minutesの値が不正なため既定値({DEFAULT_STATE['interval_minutes']})に修復します(元の値: {state.get('interval_minutes')!r})")
+        state["interval_minutes"] = DEFAULT_STATE["interval_minutes"]
+        changed = True
+
+    if not _valid_hhmm(state.get("active_start")) or not _valid_hhmm(state.get("active_end")):
+        log(
+            "警告: active_start/active_endの値が不正なため既定値に修復します"
+            f"(元の値: {state.get('active_start')!r} / {state.get('active_end')!r})"
+        )
+        state["active_start"] = DEFAULT_STATE["active_start"]
+        state["active_end"] = DEFAULT_STATE["active_end"]
+        changed = True
+    else:
+        sh, sm = (int(x) for x in state["active_start"].split(":"))
+        eh, em = (int(x) for x in state["active_end"].split(":"))
+        if hhmm_to_minutes(sh, sm) >= hhmm_to_minutes(eh, em):
+            log(
+                "警告: active_startがactive_end以降になっているため既定値に修復します"
+                f"(元の値: {state['active_start']} / {state['active_end']})"
+            )
+            state["active_start"] = DEFAULT_STATE["active_start"]
+            state["active_end"] = DEFAULT_STATE["active_end"]
+            changed = True
+
+    paused_until = state.get("paused_until")
+    if paused_until is not None:
+        try:
+            datetime.fromisoformat(paused_until)
+        except (TypeError, ValueError):
+            log(f"警告: paused_untilの値が不正なためクリアします(元の値: {paused_until!r})")
+            state["paused_until"] = None
+            changed = True
+
+    if not isinstance(state.get("enabled"), bool):
+        log(f"警告: enabledの値が不正なためFalseに修復します(元の値: {state.get('enabled')!r})")
+        state["enabled"] = False
+        changed = True
+
+    return state, changed
+
+
 def load_state():
     if not os.path.exists(STATE_PATH):
         return dict(DEFAULT_STATE)
-    with open(STATE_PATH, "r", encoding="utf-8") as f:
-        state = json.load(f)
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        if not isinstance(state, dict):
+            raise ValueError("state.jsonの内容がオブジェクトではありません")
+    except (json.JSONDecodeError, ValueError, OSError) as e:
+        log(f"警告: state.jsonの読み込みに失敗したため既定値で復旧します({e})")
+        merged = dict(DEFAULT_STATE)
+        save_state(merged)
+        return merged
+
     merged = dict(DEFAULT_STATE)
     merged.update(state)
+    merged, changed = sanitize_state(merged)
+    if changed:
+        save_state(merged)
     return merged
 
 
@@ -56,10 +126,24 @@ def audio_path(*parts):
     return path
 
 
+class PlaybackError(Exception):
+    """aplayの実行に失敗した(バイナリが無い/デバイスエラー等)ことを表す。"""
+
+
 def play_sequence(paths):
-    """複数のwavを順番に再生する(aplayは再生完了までブロックするので単に直列に呼ぶだけでよい)。"""
+    """複数のwavを順番に再生する(aplayは再生完了までブロックするので単に直列に呼ぶだけでよい)。
+
+    aplay自体の実行失敗(デバイスエラー等)はPlaybackErrorに包んで送出する。呼び出し側は
+    このエラーを捕捉して、生のトレースバックを出さずに扱うこと(設定変更自体は
+    play_sequence呼び出し前に既に保存済みであることが多いため、致命エラー扱いにしない)。
+    """
     for path in paths:
-        subprocess.run(["aplay", "-q", path], check=True)
+        try:
+            subprocess.run(["aplay", "-q", path], check=True)
+        except FileNotFoundError as e:
+            raise PlaybackError(f"aplayコマンドが見つかりません: {e}") from e
+        except subprocess.CalledProcessError as e:
+            raise PlaybackError(f"再生に失敗しました({path}): {e}") from e
 
 
 def play_error():

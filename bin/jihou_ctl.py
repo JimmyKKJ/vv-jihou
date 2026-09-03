@@ -25,6 +25,7 @@ from jihou_common import (
     ALLOWED_INTERVAL_HOURS,
     ALLOWED_INTERVAL_MINUTES,
     ALLOWED_PAUSE_HOURS,
+    PlaybackError,
     audio_path,
     hhmm_to_minutes,
     load_state,
@@ -233,6 +234,12 @@ def main():
         args.func(args)
     except FileNotFoundError as e:
         print(f"エラー: {e}", file=sys.stderr)
+        sys.exit(1)
+    except PlaybackError as e:
+        # 設定自体は既にstate.jsonへ保存済みのことが多いため、再生失敗は
+        # 致命エラーにせず警告に留める(スピーカー未接続時でも設定変更は成立させる)。
+        log(f"警告: {e}")
+        print(f"警告: 設定は保存しましたが、音声の再生に失敗しました({e})", file=sys.stderr)
         sys.exit(1)
 
 
