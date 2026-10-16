@@ -9,7 +9,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIO_DIR = os.path.join(REPO_ROOT, "audio")

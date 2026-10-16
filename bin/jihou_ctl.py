@@ -92,13 +92,17 @@ def resolve_span(args, now, command):
     except ValueError as e:
         fail(str(e))
     until = resolve_until(now, hh, mm)
-    # boostは「まで鳴らします」を1本の音声で読むため、「まで」は呼び出し側で付ける
-    made = [] if command == "boost" else [optional_audio("system", "phrase_made.wav")]
+    # 「まで止めます」「まで鳴らします」は1本ずつ録った音声で読むため、「まで」は呼び出し側で付ける
     return (
         until,
-        time_parts(hh, mm) + made,
+        time_parts(hh, mm),
         f"{until.strftime('%Y-%m-%d %H:%M')}まで",
     )
+
+
+def jihou_wo():
+    """一時停止・一時オンの読み上げの先頭に付ける「時報を」。"""
+    return audio_path("system", "phrase_jihou_wo.wav")
 
 
 def cmd_on(args):
@@ -187,6 +191,7 @@ def cmd_pause(args):
         save_state(state)
         log(f"pause: 終日止める({state['paused_until']}まで)")
         play_sequence([
+            jihou_wo(),
             audio_path("system", "allday.wav"),
             audio_path("system", "stop.wav"),
         ])
@@ -198,7 +203,12 @@ def cmd_pause(args):
     state["boost_until"] = None
     save_state(state)
     log(f"pause: {label}止める")
-    play_sequence(sequence + [audio_path("system", "stop.wav")])
+    if args.until is not None:
+        # 「まで」と「止めます」をつなげて録った音声のほうが自然に聞こえる
+        ending = optional_audio("system", "phrase_made_tomemasu.wav")
+    else:
+        ending = audio_path("system", "stop.wav")
+    play_sequence([jihou_wo()] + sequence + [ending])
 
 
 def cmd_boost(args):
@@ -213,10 +223,10 @@ def cmd_boost(args):
     log(f"boost: {label}鳴らす")
     if args.until is not None:
         # 「まで」と「鳴らします」をつなげて録った音声のほうが自然に聞こえる
-        sequence.append(optional_audio("system", "phrase_made_narashimasu.wav"))
+        ending = optional_audio("system", "phrase_made_narashimasu.wav")
     else:
-        sequence.append(optional_audio("system", "phrase_narashimasu.wav"))
-    play_sequence(sequence)
+        ending = optional_audio("system", "phrase_narashimasu.wav")
+    play_sequence([jihou_wo()] + sequence + [ending])
 
 
 def cmd_window(args):

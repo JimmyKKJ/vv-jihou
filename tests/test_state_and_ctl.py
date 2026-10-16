@@ -156,7 +156,7 @@ class ControlTests(unittest.TestCase):
         self.assertIsNone(state["boost_until"])
         self.assertEqual(
             play.call_args[0][0],
-            ["hour/01.wav", "system/min_30.wav", "system/phrase_made.wav", "system/stop.wav"],
+            ["system/phrase_jihou_wo.wav", "hour/01.wav", "system/min_30.wav", "system/phrase_made_tomemasu.wav"],
         )
 
     def test_boost_until_sets_deadline_and_cancels_pause(self):
@@ -167,14 +167,26 @@ class ControlTests(unittest.TestCase):
         self.assertIsNone(state["paused_until"])
         self.assertEqual(
             play.call_args[0][0],
-            ["hour/01.wav", "system/phrase_made_narashimasu.wav"],
+            ["system/phrase_jihou_wo.wav", "hour/01.wav", "system/phrase_made_narashimasu.wav"],
         )
 
     def test_boost_hours(self):
         state = make_state(enabled=False)
         args = Namespace(minutes=None, hours=2, until=None)
-        self.run_cmd(jihou_ctl.cmd_boost, args, state, at("2026-10-16T23:00:00"))
+        _, play = self.run_cmd(jihou_ctl.cmd_boost, args, state, at("2026-10-16T23:00:00"))
         self.assertEqual(state["boost_until"], "2026-10-17T01:00:00")
+        self.assertEqual(
+            play.call_args[0][0],
+            ["system/phrase_jihou_wo.wav", "system/hour_02.wav", "system/phrase_narashimasu.wav"],
+        )
+
+    def test_pause_minutes_reads_jihou_wo(self):
+        args = Namespace(minutes=30, hours=None, until=None, allday=False)
+        _, play = self.run_cmd(jihou_ctl.cmd_pause, args, make_state(), at("2026-10-16T10:00:00"))
+        self.assertEqual(
+            play.call_args[0][0],
+            ["system/phrase_jihou_wo.wav", "system/min_30.wav", "system/stop.wav"],
+        )
 
     def test_boost_rejects_multiple_options(self):
         args = Namespace(minutes=30, hours=None, until="01:00")
