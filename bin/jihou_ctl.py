@@ -92,9 +92,11 @@ def resolve_span(args, now, command):
     except ValueError as e:
         fail(str(e))
     until = resolve_until(now, hh, mm)
+    # boostは「まで鳴らします」を1本の音声で読むため、「まで」は呼び出し側で付ける
+    made = [] if command == "boost" else [optional_audio("system", "phrase_made.wav")]
     return (
         until,
-        time_parts(hh, mm) + [optional_audio("system", "phrase_made.wav")],
+        time_parts(hh, mm) + made,
         f"{until.strftime('%Y-%m-%d %H:%M')}まで",
     )
 
@@ -209,7 +211,12 @@ def cmd_boost(args):
     state["paused_until"] = None
     save_state(state)
     log(f"boost: {label}鳴らす")
-    play_sequence(sequence + [optional_audio("system", "phrase_narashimasu.wav")])
+    if args.until is not None:
+        # 「まで」と「鳴らします」をつなげて録った音声のほうが自然に聞こえる
+        sequence.append(optional_audio("system", "phrase_made_narashimasu.wav"))
+    else:
+        sequence.append(optional_audio("system", "phrase_narashimasu.wav"))
+    play_sequence(sequence)
 
 
 def cmd_window(args):

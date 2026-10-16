@@ -22,7 +22,8 @@ VOICEVOX(キャラクター「春日部つむぎ」)で生成した音声パー�
   - `special/noon.wav`(正午です)、`holiday_bare.wav`(祝日)、`kokuminnokyujitsu_bare.wav`(休日、国民の休日用)
   - `system/` — オン/オフ・エラー・起動・設定変更等のシステムフレーズ、頻度設定/一時停止/
     稼働時間帯設定用のbare時間数(1〜12,24,48時間)・bare分数(5〜60分)
-    - v1.1で追加: `phrase_made.wav`(「まで」)・`phrase_narashimasu.wav`(「鳴らします」)。
+    - v1.1で追加: `phrase_made.wav`(「まで」)・`phrase_narashimasu.wav`(「鳴らします」)・
+      `phrase_made_narashimasu.wav`(「まで鳴らします」、`boost --until`用)。
       無い場合は、その部分を省いて読み上げる(設定の変更自体は行われる、`state/jihou.log`に警告)
 - `bin/jihou_ctl.py` — オン/オフ・頻度設定・一時停止・一時オン・稼働時間帯設定のCLI(`--help`対応)
 - `bin/jihou_chime.py` — cronから定期実行し、鳴らすべきタイミングか判定して再生する

@@ -167,7 +167,7 @@ class ControlTests(unittest.TestCase):
         self.assertIsNone(state["paused_until"])
         self.assertEqual(
             play.call_args[0][0],
-            ["hour/01.wav", "system/phrase_made.wav", "system/phrase_narashimasu.wav"],
+            ["hour/01.wav", "system/phrase_made_narashimasu.wav"],
         )
 
     def test_boost_hours(self):
