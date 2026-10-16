@@ -25,6 +25,7 @@ from jihou_common import (
     play_error,
     play_sequence,
     save_state,
+    spoken_hour,
     state_lock,
     window_length,
     window_offset,
@@ -134,9 +135,12 @@ def decide(now, state):
 
 def build_sequence(now, state):
     hour, minute = now.hour, now.minute
+    late_hours = state.get("late_hours", False)
     sequence = []
 
-    if hour == 0 and minute == 0:
+    # 24時〜27時で読む設定では、0時ちょうどもまだ前の日の続きとして扱い、
+    # 日付のアナウンスをせず「24時ちょうどです」だけを読む
+    if hour == 0 and minute == 0 and not late_hours:
         sequence.append(audio_path("month", f"{now.month:02d}.wav"))
         sequence.append(audio_path("day", f"{now.day:02d}.wav"))
         sequence.append(audio_path("weekday", f"{WEEKDAY_FILES[now.weekday()]}.wav"))
@@ -153,7 +157,7 @@ def build_sequence(now, state):
         sequence.append(audio_path("special", "noon.wav"))
         return sequence
 
-    sequence.append(audio_path("hour", f"{hour:02d}.wav"))
+    sequence.append(audio_path("hour", f"{spoken_hour(hour, late_hours):02d}.wav"))
     if minute == 0:
         sequence.append(audio_path("minute", "00_choudo.wav"))
     else:

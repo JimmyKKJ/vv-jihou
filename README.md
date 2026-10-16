@@ -2,9 +2,14 @@
 
 VOICEVOX(キャラクター「春日部つむぎ」)で生成した音声パーツを使った、Raspberry Pi向け音声時報システム。
 
-バージョン: **1.1.2**(`jihou_ctl.py --version`で確認できる)
+バージョン: **1.2**(`jihou_ctl.py --version`で確認できる)
 
 ## 変更履歴
+
+- **1.2**
+  - `late-hours on|off`を追加。オンにすると、0時〜3時台を24時〜27時と読む(時報・操作の読み上げとも)。
+    0時ちょうどは日付を読まず「24時ちょうどです」とする
+  - 時刻の指定(`window`・`--until`)で、24:00〜27:55も受け付ける(翌日の0:00〜3:55として扱う)
 
 - **1.1.2**
   - 音声「まで止めます」を追加し、`pause --until`はこの1本で読む
@@ -21,7 +26,7 @@ VOICEVOX(キャラクター「春日部つむぎ」)で生成した音声パー�
 ## 構成
 
 - `audio/` — VOICEVOXで生成した音声パーツ
-  - `hour/00.wav`〜`27.wav` — 時(0〜23時、24〜27時は予備)
+  - `hour/00.wav`〜`27.wav` — 時(0〜23時、24〜27時は`late-hours on`のときに使う)
   - `minute/00_choudo.wav`(ちょうどです)、`05.wav`〜`55.wav`(5分刻み)
   - `month/01.wav`〜`12.wav`、`day/01.wav`〜`31.wav`
   - `weekday/mon.wav`〜`sun.wav`(「〜曜日」、末尾に「です」を含まないbare音声)
@@ -63,6 +68,17 @@ VOICEVOX(キャラクター「春日部つむぎ」)で生成した音声パー�
 - その日の最後のチャイム(稼働終了時刻以前で最後に頻度に一致する時刻)の後に「おやすみなさい」
 - 終了時刻が開始時刻より前なら、0時をまたぐ時間帯として扱う(例: 06:00〜01:00は、
   6時から翌1時まで鳴り、「おやすみなさい」は翌1時の時報の後)
+
+### 24時〜27時の読み(v1.2)
+
+`jihou_ctl.py late-hours on` で、0時〜3時台を24時〜27時と読む(既定はオフ)。
+
+- 時報: 1時30分は「25時30分」。4時以降は通常どおり(28時以降の音声は無い)
+- 0時ちょうど: 日付のアナウンスをせず「24時ちょうどです」だけを読む(まだ前の日の続きとして扱う)
+- 操作の読み上げ: `window`・`pause --until`・`boost --until`の時刻も24時〜27時で読む
+  (例:「6時から25時までに設定しました」「時報を25時30分まで止めます」)
+- 切り替えを読み上げる音声は無いため、`late-hours`は画面への表示だけ行う
+- 時刻の指定では、設定に関わらず`25:30`のような24:00〜27:55も使える(翌日の1:30等として扱う)
 
 ### オン/オフ機能
 
@@ -115,6 +131,8 @@ python bin/jihou_ctl.py pause --until 13:00     # 13時の時報から再開
 python bin/jihou_ctl.py boost --until 01:00     # 翌1時の時報まで鳴らす
 python bin/jihou_ctl.py window --start 07:00 --end 22:00
 python bin/jihou_ctl.py window --start 06:00 --end 01:00   # 0時をまたぐ
+python bin/jihou_ctl.py late-hours on                     # 0時〜3時台を24時〜27時と読む
+python bin/jihou_ctl.py window --start 06:00 --end 25:00   # 25:00は翌1:00と同じ
 python bin/jihou_ctl.py status
 python bin/jihou_ctl.py --version
 

@@ -9,7 +9,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-__version__ = "1.1.2"
+__version__ = "1.2"
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIO_DIR = os.path.join(REPO_ROOT, "audio")
@@ -25,7 +25,12 @@ DEFAULT_STATE = {
     "paused_until": None,
     # 一時オン(boost)の期限。この日時の時報までは、オフ・稼働時間帯外・一時停止中でも鳴らす
     "boost_until": None,
+    # 0時〜3時台を24時〜27時と読むか(時報・操作の読み上げとも)
+    "late_hours": False,
 }
+
+# 24時〜27時の音声(hour/24.wav〜27.wav)がある、0時〜3時台
+LATE_HOURS_LAST = 3
 
 MINUTES_PER_DAY = 24 * 60
 
@@ -97,10 +102,11 @@ def sanitize_state(state):
                 state[key] = None
                 changed = True
 
-    if not isinstance(state.get("enabled"), bool):
-        log(f"警告: enabledの値が不正なためFalseに修復します(元の値: {state.get('enabled')!r})")
-        state["enabled"] = False
-        changed = True
+    for key in ("enabled", "late_hours"):
+        if not isinstance(state.get(key), bool):
+            log(f"警告: {key}の値が不正なためFalseに修復します(元の値: {state.get(key)!r})")
+            state[key] = False
+            changed = True
 
     return state, changed
 
@@ -214,14 +220,19 @@ def play_error():
 
 
 def parse_hhmm(value):
-    """'HH:MM' 形式をパースし、5分刻みでなければエラーにする。"""
-    try:
-        dt = datetime.strptime(value, "%H:%M")
-    except ValueError:
+    """'HH:MM' 形式をパースし、5分刻みでなければエラーにする。
+
+    24:00〜27:55 も受け付け、翌日の0:00〜3:55として返す(24時〜27時の読みと揃えるため)。
+    """
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", value or "")
+    if match is None:
         raise ValueError(f"時刻は HH:MM 形式で指定してください(指定値: {value})")
-    if dt.minute % 5 != 0:
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if not (0 <= hour <= 24 + LATE_HOURS_LAST and 0 <= minute <= 59):
+        raise ValueError(f"時刻は 00:00〜{24 + LATE_HOURS_LAST}:55 の範囲で指定してください(指定値: {value})")
+    if minute % 5 != 0:
         raise ValueError(f"時刻は5分刻みで指定してください(指定値: {value})")
-    return dt.hour, dt.minute
+    return hour % 24, minute
 
 
 def hhmm_to_minutes(hh, mm):
@@ -231,6 +242,13 @@ def hhmm_to_minutes(hh, mm):
 def now_minutes_of_day(now=None):
     now = now or datetime.now()
     return now.hour * 60 + now.minute
+
+
+def spoken_hour(hour, late_hours):
+    """読み上げに使う「時」。late_hoursなら0時〜3時台を24時〜27時にする。"""
+    if late_hours and hour <= LATE_HOURS_LAST:
+        return hour + 24
+    return hour
 
 
 def window_length(start_min, end_min):

@@ -4,5 +4,6 @@
   "active_start": "06:30",
   "active_end": "23:00",
   "paused_until": null,
-  "boost_until": null
+  "boost_until": null,
+  "late_hours": false
 }
