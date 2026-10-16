@@ -24,6 +24,7 @@ def make_state(**overrides):
         "active_end": "23:00",
         "paused_until": None,
         "boost_until": None,
+        "late_hours": False,
     }
     state.update(overrides)
     return state
@@ -133,6 +134,41 @@ class DecideTests(unittest.TestCase):
         self.assertFalse(jihou_chime.decide(at("2026-10-16T23:50"), state)["ring"])
 
 
+class LateHoursTests(unittest.TestCase):
+    def sequence(self, now, **overrides):
+        with patch.object(jihou_chime, "audio_path", side_effect=lambda *p: "/".join(p)):
+            return jihou_chime.build_sequence(at(now), make_state(**overrides))
+
+    def test_spoken_hour(self):
+        self.assertEqual(jihou_common.spoken_hour(1, True), 25)
+        self.assertEqual(jihou_common.spoken_hour(3, True), 27)
+        self.assertEqual(jihou_common.spoken_hour(4, True), 4)
+        self.assertEqual(jihou_common.spoken_hour(1, False), 1)
+
+    def test_chime_reads_25_when_on(self):
+        self.assertEqual(self.sequence("2026-10-17T01:30", late_hours=True), ["hour/25.wav", "minute/30.wav"])
+        self.assertEqual(self.sequence("2026-10-17T01:30"), ["hour/01.wav", "minute/30.wav"])
+        self.assertEqual(self.sequence("2026-10-17T04:00", late_hours=True), ["hour/04.wav", "minute/00_choudo.wav"])
+
+    def test_midnight_reads_24_without_date_when_on(self):
+        self.assertEqual(self.sequence("2026-10-17T00:00", late_hours=True), ["hour/24.wav", "minute/00_choudo.wav"])
+        self.assertEqual(self.sequence("2026-10-17T00:00")[0], "month/10.wav")
+
+    def test_parse_hhmm_accepts_24_to_27(self):
+        self.assertEqual(jihou_common.parse_hhmm("25:30"), (1, 30))
+        self.assertEqual(jihou_common.parse_hhmm("24:00"), (0, 0))
+        self.assertEqual(jihou_common.parse_hhmm("07:00"), (7, 0))
+        for value in ("28:00", "06:31", "6:3x"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                jihou_common.parse_hhmm(value)
+
+    def test_sanitize_repairs_non_bool_late_hours(self):
+        with patch.object(jihou_common, "log"):
+            state, changed = jihou_common.sanitize_state(make_state(late_hours="yes"))
+        self.assertTrue(changed)
+        self.assertFalse(state["late_hours"])
+
+
 class ControlTests(unittest.TestCase):
     def run_cmd(self, func, args, state, now):
         with (
@@ -215,6 +251,30 @@ class ControlTests(unittest.TestCase):
             play.call_args[0][0],
             ["hour/06.wav", "system/phrase_kara.wav", "hour/01.wav", "system/phrase_made_ni_settei_shimashita.wav"],
         )
+
+    def test_window_reads_25_when_late_hours(self):
+        state = make_state(late_hours=True)
+        args = Namespace(start="06:00", end="25:00")
+        _, play = self.run_cmd(jihou_ctl.cmd_window, args, state, at("2026-10-16T10:00:00"))
+        self.assertEqual(state["active_end"], "01:00")
+        self.assertEqual(
+            play.call_args[0][0],
+            ["hour/06.wav", "system/phrase_kara.wav", "hour/25.wav", "system/phrase_made_ni_settei_shimashita.wav"],
+        )
+
+    def test_pause_until_reads_25_when_late_hours(self):
+        state = make_state(late_hours=True)
+        args = Namespace(minutes=None, hours=None, until="01:30", allday=False)
+        _, play = self.run_cmd(jihou_ctl.cmd_pause, args, state, at("2026-10-16T23:00:00"))
+        self.assertEqual(play.call_args[0][0][1], "hour/25.wav")
+
+    def test_late_hours_on_off(self):
+        state = make_state()
+        with patch("builtins.print"):
+            self.run_cmd(jihou_ctl.cmd_late_hours, Namespace(mode="on"), state, at("2026-10-16T10:00:00"))
+            self.assertTrue(state["late_hours"])
+            self.run_cmd(jihou_ctl.cmd_late_hours, Namespace(mode="off"), state, at("2026-10-16T10:00:00"))
+        self.assertFalse(state["late_hours"])
 
     def test_window_rejects_same_time(self):
         args = Namespace(start="07:00", end="07:00")

@@ -14,6 +14,7 @@
   jihou_ctl.py boost --hours 1〜12|24|48
   jihou_ctl.py boost --until HH:MM   (5分刻み、HH:MMの時報まで鳴らす。過ぎた時刻なら翌日)
   jihou_ctl.py window --start HH:MM --end HH:MM (5分刻み、終了が開始より前なら0時をまたぐ)
+  jihou_ctl.py late-hours on|off   (0時〜3時台を24時〜27時と読むか)
   jihou_ctl.py status
 
   -h, --help  この使い方を表示
@@ -43,6 +44,7 @@ from jihou_common import (
     play_sequence,
     resolve_until,
     save_state,
+    spoken_hour,
     state_lock,
     window_length,
     window_offset,
@@ -54,15 +56,15 @@ def fail(message):
     sys.exit(1)
 
 
-def time_parts(hh, mm):
-    """「n時m分」の音声パーツ(0分は時だけ)。"""
-    parts = [audio_path("hour", f"{hh:02d}.wav")]
+def time_parts(hh, mm, late_hours=False):
+    """「n時m分」の音声パーツ(0分は時だけ)。late_hoursなら0時〜3時台を24時〜27時で読む。"""
+    parts = [audio_path("hour", f"{spoken_hour(hh, late_hours):02d}.wav")]
     if mm != 0:
         parts.append(audio_path("system", f"min_{mm:02d}.wav"))
     return parts
 
 
-def resolve_span(args, now, command):
+def resolve_span(args, now, command, state):
     """pause/boostの --minutes/--hours/--until から、(期限の日時, 読み上げの前半, ログ用の説明)を返す。"""
     specified = [v for v in (args.minutes, args.hours, args.until) if v is not None]
     if len(specified) != 1:
@@ -95,7 +97,7 @@ def resolve_span(args, now, command):
     # 「まで止めます」「まで鳴らします」は1本ずつ録った音声で読むため、「まで」は呼び出し側で付ける
     return (
         until,
-        time_parts(hh, mm),
+        time_parts(hh, mm, state["late_hours"]),
         f"{until.strftime('%Y-%m-%d %H:%M')}まで",
     )
 
@@ -197,7 +199,7 @@ def cmd_pause(args):
         ])
         return
 
-    until, sequence, label = resolve_span(args, now, "pause")
+    until, sequence, label = resolve_span(args, now, "pause", state)
     state["paused_until"] = until.isoformat()
     # 後から出した指示を優先し、設定中の一時オンは取り消す
     state["boost_until"] = None
@@ -215,7 +217,7 @@ def cmd_boost(args):
     state = load_state()
     now = datetime.now()
 
-    until, sequence, label = resolve_span(args, now, "boost")
+    until, sequence, label = resolve_span(args, now, "boost", state)
     state["boost_until"] = until.isoformat()
     # 後から出した指示を優先し、設定中の一時停止は取り消す
     state["paused_until"] = None
@@ -248,9 +250,9 @@ def cmd_window(args):
     ) else ""
     log(f"window: {state['active_start']}〜{state['active_end']}{overnight}に設定")
 
-    sequence = time_parts(start_h, start_m)
+    sequence = time_parts(start_h, start_m, state["late_hours"])
     sequence.append(audio_path("system", "phrase_kara.wav"))
-    sequence += time_parts(end_h, end_m)
+    sequence += time_parts(end_h, end_m, state["late_hours"])
     sequence.append(audio_path("system", "phrase_made_ni_settei_shimashita.wav"))
     play_sequence(sequence)
 
@@ -267,12 +269,26 @@ def cmd_status(args):
     print(f"active_end: {state['active_end']}" + ("(翌日、0時をまたぐ)" if overnight else ""))
     print(f"paused_until: {state['paused_until']}")
     print(f"boost_until: {state['boost_until']}")
+    print(f"late_hours: {state['late_hours']}")
+
+
+def cmd_late_hours(args):
+    state = load_state()
+    state["late_hours"] = args.mode == "on"
+    save_state(state)
+    if state["late_hours"]:
+        message = "0時〜3時台を24時〜27時と読みます(0時ちょうどは日付を読まず「24時ちょうど」)"
+    else:
+        message = "0時〜3時台を通常どおり0時〜3時と読みます"
+    log(f"late-hours: {args.mode}")
+    # この設定の切り替えを読み上げる音声は無いため、表示だけにする
+    print(message)
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="jihou_ctl.py",
-        description="時報システムの制御CLI(オン/オフ・頻度設定・一時停止・一時オン・稼働時間帯設定)",
+        description="時報システムの制御CLI(オン/オフ・頻度設定・一時停止・一時オン・稼働時間帯設定・24時〜27時の読み)",
     )
     parser.add_argument("--version", action="version", version=f"vv-jihou {__version__}")
     sub = parser.add_subparsers(dest="command")
@@ -318,6 +334,12 @@ def build_parser():
     p_window.add_argument("--start", required=True, help="開始時刻 HH:MM(5分刻み)")
     p_window.add_argument("--end", required=True, help="終了時刻 HH:MM(5分刻み)")
     p_window.set_defaults(func=cmd_window)
+
+    p_late = sub.add_parser(
+        "late-hours", help="0時〜3時台を24時〜27時と読むかを設定する(時報・操作の読み上げとも)"
+    )
+    p_late.add_argument("mode", choices=["on", "off"], help="on: 24時〜27時で読む / off: 0時〜3時で読む")
+    p_late.set_defaults(func=cmd_late_hours)
 
     p_status = sub.add_parser("status", help="現在の設定を表示する")
     p_status.set_defaults(func=cmd_status)

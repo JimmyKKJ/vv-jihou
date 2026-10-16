@@ -71,5 +71,6 @@ python3 -m venv .venv
 .venv/bin/python bin/jihou_ctl.py boost --until 01:00
 .venv/bin/python bin/jihou_ctl.py window --start 07:00 --end 22:00
 .venv/bin/python bin/jihou_ctl.py window --start 06:00 --end 01:00
+.venv/bin/python bin/jihou_ctl.py late-hours on
 .venv/bin/python bin/jihou_ctl.py --version
 ```
