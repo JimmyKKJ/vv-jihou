@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""時報システムの制御CLI(オン/オフ・頻度設定・一時停止・稼働時間帯設定)。
+"""時報システムの制御CLI(オン/オフ・頻度設定・一時停止・一時オン・稼働時間帯設定)。
 
 使い方:
   jihou_ctl.py on
@@ -8,11 +8,16 @@
   jihou_ctl.py interval --hours 1|2|3|6|12
   jihou_ctl.py pause --minutes 5|10|15|30
   jihou_ctl.py pause --hours 1〜12|24|48
+  jihou_ctl.py pause --until HH:MM   (5分刻み、HH:MMの時報から再開。過ぎた時刻なら翌日)
   jihou_ctl.py pause --allday
-  jihou_ctl.py window --start HH:MM --end HH:MM (5分刻み)
+  jihou_ctl.py boost --minutes 5|10|15|30
+  jihou_ctl.py boost --hours 1〜12|24|48
+  jihou_ctl.py boost --until HH:MM   (5分刻み、HH:MMの時報まで鳴らす。過ぎた時刻なら翌日)
+  jihou_ctl.py window --start HH:MM --end HH:MM (5分刻み、終了が開始より前なら0時をまたぐ)
   jihou_ctl.py status
 
   -h, --help  この使い方を表示
+  --version   バージョンを表示
 """
 
 import argparse
@@ -26,15 +31,72 @@ from jihou_common import (
     ALLOWED_INTERVAL_MINUTES,
     ALLOWED_PAUSE_HOURS,
     PlaybackError,
+    __version__,
     audio_path,
+    crosses_midnight,
     hhmm_to_minutes,
+    in_window,
     load_state,
     log,
+    optional_audio,
     parse_hhmm,
     play_sequence,
+    resolve_until,
     save_state,
     state_lock,
+    window_length,
+    window_offset,
 )
+
+
+def fail(message):
+    print(f"エラー: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def time_parts(hh, mm):
+    """「n時m分」の音声パーツ(0分は時だけ)。"""
+    parts = [audio_path("hour", f"{hh:02d}.wav")]
+    if mm != 0:
+        parts.append(audio_path("system", f"min_{mm:02d}.wav"))
+    return parts
+
+
+def resolve_span(args, now, command):
+    """pause/boostの --minutes/--hours/--until から、(期限の日時, 読み上げの前半, ログ用の説明)を返す。"""
+    specified = [v for v in (args.minutes, args.hours, args.until) if v is not None]
+    if len(specified) != 1:
+        options = "--minutes / --hours / --until" + (" / --allday" if command == "pause" else "")
+        fail(f"{options} のいずれか1つだけを指定してください")
+
+    if args.minutes is not None:
+        if args.minutes not in ALLOWED_INTERVAL_MINUTES:
+            fail(f"--minutes は {ALLOWED_INTERVAL_MINUTES} のいずれかで指定してください")
+        return (
+            now + timedelta(minutes=args.minutes),
+            [audio_path("system", f"min_{args.minutes:02d}.wav")],
+            f"{args.minutes}分",
+        )
+
+    if args.hours is not None:
+        if args.hours not in ALLOWED_PAUSE_HOURS:
+            fail(f"--hours は {ALLOWED_PAUSE_HOURS} のいずれかで指定してください")
+        return (
+            now + timedelta(hours=args.hours),
+            [audio_path("system", f"hour_{args.hours:02d}.wav")],
+            f"{args.hours}時間",
+        )
+
+    try:
+        hh, mm = parse_hhmm(args.until)
+    except ValueError as e:
+        fail(str(e))
+    until = resolve_until(now, hh, mm)
+    return (
+        until,
+        time_parts(hh, mm) + [optional_audio("system", "phrase_made.wav")],
+        f"{until.strftime('%Y-%m-%d %H:%M')}まで",
+    )
 
 
 def cmd_on(args):
@@ -51,6 +113,8 @@ def cmd_on(args):
 def cmd_off(args):
     state = load_state()
     state["enabled"] = False
+    # 明示的なオフは、設定中の一時オンも取り消す
+    state["boost_until"] = None
     save_state(state)
     log("off: 時報を無効化")
     play_sequence([audio_path("system", "off.wav")])
@@ -95,62 +159,57 @@ def cmd_interval(args):
         ])
 
 
+def allday_until(now, state):
+    """--alldayの期限。0時をまたぐ時間帯の中にいれば、その時間帯の終了の1分後
+    (終了時刻の時報・おやすみも鳴らさない)。それ以外は今日の23:59:59。"""
+    start_h, start_m = map(int, state["active_start"].split(":"))
+    end_h, end_m = map(int, state["active_end"].split(":"))
+    start_min = hhmm_to_minutes(start_h, start_m)
+    end_min = hhmm_to_minutes(end_h, end_m)
+    now_min = hhmm_to_minutes(now.hour, now.minute)
+    if crosses_midnight(start_min, end_min) and in_window(now_min, start_min, end_min):
+        remaining = window_length(start_min, end_min) - window_offset(now_min, start_min)
+        return now.replace(second=0, microsecond=0) + timedelta(minutes=remaining + 1)
+    return now.replace(hour=23, minute=59, second=59, microsecond=0)
+
+
 def cmd_pause(args):
     state = load_state()
     now = datetime.now()
 
-    specified = [v for v in (args.minutes, args.hours, args.allday) if v]
-    if len(specified) != 1:
-        print(
-            "エラー: --minutes / --hours / --allday のいずれか1つだけを指定してください",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
     if args.allday:
-        until = now.replace(hour=23, minute=59, second=59, microsecond=0)
-        state["paused_until"] = until.isoformat()
+        if any(v is not None for v in (args.minutes, args.hours, args.until)):
+            fail("--minutes / --hours / --until / --allday のいずれか1つだけを指定してください")
+        state["paused_until"] = allday_until(now, state).isoformat()
+        state["boost_until"] = None
         save_state(state)
-        log("pause: 終日止める")
+        log(f"pause: 終日止める({state['paused_until']}まで)")
         play_sequence([
             audio_path("system", "allday.wav"),
             audio_path("system", "stop.wav"),
         ])
         return
 
-    if args.minutes is not None:
-        if args.minutes not in ALLOWED_INTERVAL_MINUTES:
-            print(
-                f"エラー: --minutes は {ALLOWED_INTERVAL_MINUTES} のいずれかで指定してください",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        until = now + timedelta(minutes=args.minutes)
-        state["paused_until"] = until.isoformat()
-        save_state(state)
-        log(f"pause: {args.minutes}分止める")
-        play_sequence([
-            audio_path("system", f"min_{args.minutes:02d}.wav"),
-            audio_path("system", "stop.wav"),
-        ])
-        return
+    until, sequence, label = resolve_span(args, now, "pause")
+    state["paused_until"] = until.isoformat()
+    # 後から出した指示を優先し、設定中の一時オンは取り消す
+    state["boost_until"] = None
+    save_state(state)
+    log(f"pause: {label}止める")
+    play_sequence(sequence + [audio_path("system", "stop.wav")])
 
-    if args.hours is not None:
-        if args.hours not in ALLOWED_PAUSE_HOURS:
-            print(
-                f"エラー: --hours は {ALLOWED_PAUSE_HOURS} のいずれかで指定してください",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        until = now + timedelta(hours=args.hours)
-        state["paused_until"] = until.isoformat()
-        save_state(state)
-        log(f"pause: {args.hours}時間止める")
-        play_sequence([
-            audio_path("system", f"hour_{args.hours:02d}.wav"),
-            audio_path("system", "stop.wav"),
-        ])
-        return
+
+def cmd_boost(args):
+    state = load_state()
+    now = datetime.now()
+
+    until, sequence, label = resolve_span(args, now, "boost")
+    state["boost_until"] = until.isoformat()
+    # 後から出した指示を優先し、設定中の一時停止は取り消す
+    state["paused_until"] = None
+    save_state(state)
+    log(f"boost: {label}鳴らす")
+    play_sequence(sequence + [optional_audio("system", "phrase_narashimasu.wav")])
 
 
 def cmd_window(args):
@@ -159,43 +218,46 @@ def cmd_window(args):
         start_h, start_m = parse_hhmm(args.start)
         end_h, end_m = parse_hhmm(args.end)
     except ValueError as e:
-        print(f"エラー: {e}", file=sys.stderr)
-        sys.exit(1)
+        fail(str(e))
 
-    if hhmm_to_minutes(start_h, start_m) >= hhmm_to_minutes(end_h, end_m):
-        print("エラー: --end は --start より後の時刻にしてください", file=sys.stderr)
-        sys.exit(1)
+    if hhmm_to_minutes(start_h, start_m) == hhmm_to_minutes(end_h, end_m):
+        fail("--start と --end に同じ時刻は指定できません")
 
     state["active_start"] = f"{start_h:02d}:{start_m:02d}"
     state["active_end"] = f"{end_h:02d}:{end_m:02d}"
     save_state(state)
-    log(f"window: {state['active_start']}〜{state['active_end']}に設定")
+    overnight = "(0時をまたぐ)" if crosses_midnight(
+        hhmm_to_minutes(start_h, start_m), hhmm_to_minutes(end_h, end_m)
+    ) else ""
+    log(f"window: {state['active_start']}〜{state['active_end']}{overnight}に設定")
 
-    sequence = [audio_path("hour", f"{start_h:02d}.wav")]
-    if start_m != 0:
-        sequence.append(audio_path("system", f"min_{start_m:02d}.wav"))
+    sequence = time_parts(start_h, start_m)
     sequence.append(audio_path("system", "phrase_kara.wav"))
-    sequence.append(audio_path("hour", f"{end_h:02d}.wav"))
-    if end_m != 0:
-        sequence.append(audio_path("system", f"min_{end_m:02d}.wav"))
+    sequence += time_parts(end_h, end_m)
     sequence.append(audio_path("system", "phrase_made_ni_settei_shimashita.wav"))
     play_sequence(sequence)
 
 
 def cmd_status(args):
     state = load_state()
+    start_h, start_m = map(int, state["active_start"].split(":"))
+    end_h, end_m = map(int, state["active_end"].split(":"))
+    overnight = crosses_midnight(hhmm_to_minutes(start_h, start_m), hhmm_to_minutes(end_h, end_m))
+    print(f"version: {__version__}")
     print(f"enabled: {state['enabled']}")
     print(f"interval_minutes: {state['interval_minutes']}")
     print(f"active_start: {state['active_start']}")
-    print(f"active_end: {state['active_end']}")
+    print(f"active_end: {state['active_end']}" + ("(翌日、0時をまたぐ)" if overnight else ""))
     print(f"paused_until: {state['paused_until']}")
+    print(f"boost_until: {state['boost_until']}")
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="jihou_ctl.py",
-        description="時報システムの制御CLI(オン/オフ・頻度設定・一時停止・稼働時間帯設定)",
+        description="時報システムの制御CLI(オン/オフ・頻度設定・一時停止・一時オン・稼働時間帯設定)",
     )
+    parser.add_argument("--version", action="version", version=f"vv-jihou {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     p_on = sub.add_parser("on", help="時報を有効化する")
@@ -214,10 +276,28 @@ def build_parser():
     p_pause = sub.add_parser("pause", help="時報を一時的に止める")
     p_pause.add_argument("--minutes", type=int, help=f"分単位、{ALLOWED_INTERVAL_MINUTES}のいずれか")
     p_pause.add_argument("--hours", type=int, help=f"時間単位、{ALLOWED_PAUSE_HOURS}のいずれか")
-    p_pause.add_argument("--allday", action="store_true", help="今日いっぱい止める")
+    p_pause.add_argument(
+        "--until", help="HH:MM(5分刻み)の時報まで止める(その時報から再開。過ぎた時刻なら翌日)"
+    )
+    p_pause.add_argument(
+        "--allday", action="store_true",
+        help="今日いっぱい止める(0時をまたぐ時間帯の中なら、その時間帯の終わりまで)",
+    )
     p_pause.set_defaults(func=cmd_pause)
 
-    p_window = sub.add_parser("window", help="時報を鳴らす時間帯を設定する(5分刻み)")
+    p_boost = sub.add_parser(
+        "boost", help="一時的に時報を鳴らす(オフ中・時間帯外・一時停止中でも、期限まで設定の頻度で鳴らす)"
+    )
+    p_boost.add_argument("--minutes", type=int, help=f"分単位、{ALLOWED_INTERVAL_MINUTES}のいずれか")
+    p_boost.add_argument("--hours", type=int, help=f"時間単位、{ALLOWED_PAUSE_HOURS}のいずれか")
+    p_boost.add_argument(
+        "--until", help="HH:MM(5分刻み)の時報まで鳴らす(その時報も鳴らす。過ぎた時刻なら翌日)"
+    )
+    p_boost.set_defaults(func=cmd_boost)
+
+    p_window = sub.add_parser(
+        "window", help="時報を鳴らす時間帯を設定する(5分刻み、終了が開始より前なら0時をまたぐ)"
+    )
     p_window.add_argument("--start", required=True, help="開始時刻 HH:MM(5分刻み)")
     p_window.add_argument("--end", required=True, help="終了時刻 HH:MM(5分刻み)")
     p_window.set_defaults(func=cmd_window)

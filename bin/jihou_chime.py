@@ -5,6 +5,7 @@
   jihou_chime.py            現在時刻で判定して鳴らす(cron用)
   jihou_chime.py --at HH:MM 指定時刻で判定して鳴らす(動作確認用、日付は今日扱い)
   jihou_chime.py --at YYYY-MM-DDTHH:MM 指定日時で判定して鳴らす(祝日パターン確認用)
+  jihou_chime.py --version  バージョンを表示
   -h, --help  この使い方を表示
 """
 
@@ -15,14 +16,18 @@ from datetime import datetime
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
 from jihou_common import (
+    __version__,
     audio_path,
     hhmm_to_minutes,
+    in_window,
     load_state,
     log,
     play_error,
     play_sequence,
     save_state,
     state_lock,
+    window_length,
+    window_offset,
 )
 
 WEEKDAY_FILES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -59,19 +64,72 @@ def holiday_marker(date):
 
 
 def first_and_last_tick(active_start_min, active_end_min, interval):
-    first_tick = None
-    t = active_start_min - (active_start_min % interval)
-    while t < active_start_min:
-        t += interval
-    if t <= active_end_min:
-        first_tick = t
+    """稼働時間帯の最初・最後の時報を、稼働開始からの経過分(offset)で返す。
 
-    last_tick = None
-    t = active_end_min - (active_end_min % interval)
-    if t >= active_start_min:
-        last_tick = t
+    0時をまたぐ時間帯(06:00〜01:00等)でも、終了側を翌日として扱える。頻度は全て
+    1440(1日の分数)の約数のため、「0時からの分 % interval == 0」とoffsetの剰余が一致する。
+    該当する時報が無ければNone。
+    """
+    length = window_length(active_start_min, active_end_min)
+
+    first_offset = (-active_start_min) % interval
+    first_tick = first_offset if first_offset <= length else None
+
+    last_offset = length - (active_end_min % interval)
+    last_tick = last_offset if last_offset >= 0 else None
 
     return first_tick, last_tick
+
+
+def decide(now, state):
+    """nowに鳴らすかを判定する(state.jsonは書き換えない純関数)。
+
+    戻り値: {"ring": 鳴らすか, "morning": おはようを付けるか, "night": おやすみを付けるか,
+             "clear": 期限切れのためstateから消すキーの一覧}
+    """
+    result = {"ring": False, "morning": False, "night": False, "clear": []}
+
+    boosting = False
+    if state.get("boost_until"):
+        # 一時オンは「n時m分の時報まで」鳴らすため、秒を切り捨てて期限と比べる
+        boost_until = datetime.fromisoformat(state["boost_until"])
+        if now.replace(second=0, microsecond=0) <= boost_until:
+            boosting = True
+        else:
+            result["clear"].append("boost_until")
+
+    normal = state["enabled"]
+    if normal and state["paused_until"]:
+        # load_state()内のsanitize_state()がtz付き等の不正な値を既に
+        # 除去しているため、ここでは常にnaive(ローカル時刻)の値が入っている。
+        paused_until = datetime.fromisoformat(state["paused_until"])
+        if now < paused_until:
+            normal = False
+        else:
+            result["clear"].append("paused_until")
+
+    start_h, start_m = map(int, state["active_start"].split(":"))
+    end_h, end_m = map(int, state["active_end"].split(":"))
+    active_start_min = hhmm_to_minutes(start_h, start_m)
+    active_end_min = hhmm_to_minutes(end_h, end_m)
+    now_min = hhmm_to_minutes(now.hour, now.minute)
+
+    normal = normal and in_window(now_min, active_start_min, active_end_min)
+    if not (normal or boosting):
+        return result
+
+    interval = state["interval_minutes"]
+    if now_min % interval != 0:
+        return result
+
+    result["ring"] = True
+    if normal:
+        # 挨拶は通常の稼働時間帯の境界でだけ付ける(一時オンで時間帯外に鳴らす分には付けない)
+        first_tick, last_tick = first_and_last_tick(active_start_min, active_end_min, interval)
+        offset = window_offset(now_min, active_start_min)
+        result["morning"] = first_tick is not None and offset == first_tick
+        result["night"] = last_tick is not None and offset == last_tick
+    return result
 
 
 def build_sequence(now, state):
@@ -106,6 +164,7 @@ def build_sequence(now, state):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--at", help="判定に使う時刻(HH:MM、またはYYYY-MM-DDTHH:MM)")
+    parser.add_argument("--version", action="version", version=f"vv-jihou {__version__}")
     args = parser.parse_args()
 
     try:
@@ -121,42 +180,22 @@ def main():
 
     try:
         # jihou_ctl.py側の手動操作と同時に走ってもstate.jsonが競合しないよう、
-        # 読み込み〜(必要なら)paused_untilクリアの保存までをロックで囲む。
+        # 読み込み〜(必要なら)期限切れのpaused_until/boost_untilクリアの保存までをロックで囲む。
         with state_lock():
             state = load_state()
+            decision = decide(now, state)
+            if decision["clear"] and not is_simulation:
+                for key in decision["clear"]:
+                    state[key] = None
+                save_state(state)
 
-            if not state["enabled"]:
-                return
-
-            if state["paused_until"]:
-                # load_state()内のsanitize_state()がtz付き等の不正な値を既に
-                # 除去しているため、ここでは常にnaive(ローカル時刻)の値が入っている。
-                paused_until = datetime.fromisoformat(state["paused_until"])
-                if now < paused_until:
-                    return
-                if not is_simulation:
-                    state["paused_until"] = None
-                    save_state(state)
-
-        start_h, start_m = map(int, state["active_start"].split(":"))
-        end_h, end_m = map(int, state["active_end"].split(":"))
-        active_start_min = hhmm_to_minutes(start_h, start_m)
-        active_end_min = hhmm_to_minutes(end_h, end_m)
-        now_min = hhmm_to_minutes(now.hour, now.minute)
-
-        if now_min < active_start_min or now_min > active_end_min:
-            return
-
-        interval = state["interval_minutes"]
-        if now_min % interval != 0:
+        if not decision["ring"]:
             return
 
         sequence = build_sequence(now, state)
-
-        first_tick, last_tick = first_and_last_tick(active_start_min, active_end_min, interval)
-        if first_tick is not None and now_min == first_tick:
+        if decision["morning"]:
             sequence.insert(0, audio_path("system", "ohayou.wav"))
-        if last_tick is not None and now_min == last_tick:
+        if decision["night"]:
             sequence.append(audio_path("system", "oyasumi.wav"))
 
         log(f"chime: {now.strftime('%Y-%m-%d %H:%M')} を再生")

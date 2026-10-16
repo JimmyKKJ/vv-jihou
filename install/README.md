@@ -66,5 +66,10 @@ python3 -m venv .venv
 .venv/bin/python bin/jihou_ctl.py pause --minutes 30
 .venv/bin/python bin/jihou_ctl.py pause --hours 2
 .venv/bin/python bin/jihou_ctl.py pause --allday
+.venv/bin/python bin/jihou_ctl.py pause --until 13:00
+.venv/bin/python bin/jihou_ctl.py boost --minutes 30
+.venv/bin/python bin/jihou_ctl.py boost --until 01:00
 .venv/bin/python bin/jihou_ctl.py window --start 07:00 --end 22:00
+.venv/bin/python bin/jihou_ctl.py window --start 06:00 --end 01:00
+.venv/bin/python bin/jihou_ctl.py --version
 ```

@@ -9,6 +9,8 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
+__version__ = "1.1"
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIO_DIR = os.path.join(REPO_ROOT, "audio")
 STATE_PATH = os.path.join(REPO_ROOT, "state", "state.json")
@@ -21,7 +23,11 @@ DEFAULT_STATE = {
     "active_start": "06:30",
     "active_end": "23:00",
     "paused_until": None,
+    # 一時オン(boost)の期限。この日時の時報までは、オフ・稼働時間帯外・一時停止中でも鳴らす
+    "boost_until": None,
 }
+
+MINUTES_PER_DAY = 24 * 60
 
 # 頻度設定・一時停止で選べる値(録音済みの音声パーツに対応するもののみ)
 ALLOWED_INTERVAL_MINUTES = [5, 10, 15, 30]
@@ -62,29 +68,33 @@ def sanitize_state(state):
     else:
         sh, sm = (int(x) for x in state["active_start"].split(":"))
         eh, em = (int(x) for x in state["active_end"].split(":"))
-        if hhmm_to_minutes(sh, sm) >= hhmm_to_minutes(eh, em):
+        # active_start > active_end は0時をまたぐ時間帯(例: 06:00〜01:00)として有効。
+        # 開始と終了が同じ時刻だけは長さが決まらないため不正とする。
+        if hhmm_to_minutes(sh, sm) == hhmm_to_minutes(eh, em):
             log(
-                "警告: active_startがactive_end以降になっているため既定値に修復します"
+                "警告: active_startとactive_endが同じ時刻のため既定値に修復します"
                 f"(元の値: {state['active_start']} / {state['active_end']})"
             )
             state["active_start"] = DEFAULT_STATE["active_start"]
             state["active_end"] = DEFAULT_STATE["active_end"]
             changed = True
 
-    paused_until = state.get("paused_until")
-    if paused_until is not None:
+    for key in ("paused_until", "boost_until"):
+        value = state.get(key)
+        if value is None:
+            continue
         try:
-            parsed_paused_until = datetime.fromisoformat(paused_until)
+            parsed = datetime.fromisoformat(value)
         except (TypeError, ValueError):
-            log(f"警告: paused_untilの値が不正なためクリアします(元の値: {paused_until!r})")
-            state["paused_until"] = None
+            log(f"警告: {key}の値が不正なためクリアします(元の値: {value!r})")
+            state[key] = None
             changed = True
         else:
-            if parsed_paused_until.tzinfo is not None:
+            if parsed.tzinfo is not None:
                 # 内部では常にnaive(タイムゾーン無し、ローカル時刻)で扱う規約のため、
                 # tz付きの値はdatetime.now()との比較でTypeErrorになり続けてしまう。
-                log(f"警告: paused_untilにタイムゾーン情報が含まれていたためクリアします(元の値: {paused_until!r})")
-                state["paused_until"] = None
+                log(f"警告: {key}にタイムゾーン情報が含まれていたためクリアします(元の値: {value!r})")
+                state[key] = None
                 changed = True
 
     if not isinstance(state.get("enabled"), bool):
@@ -163,6 +173,16 @@ class PlaybackError(Exception):
     """aplayの実行に失敗した(バイナリが無い/デバイスエラー等)ことを表す。"""
 
 
+def optional_audio(*parts):
+    """v1.1で追加した音声パーツ用。ファイルが無ければ警告をログに書いてNoneを返す
+    (音声を用意する前でも、設定の変更自体は成立させるため)。"""
+    try:
+        return audio_path(*parts)
+    except FileNotFoundError as e:
+        log(f"警告: {e}(この部分を省いて再生します)")
+        return None
+
+
 def play_sequence(paths):
     """複数のwavを順番に再生する(aplayは再生完了までブロックするので単に直列に呼ぶだけでよい)。
 
@@ -171,6 +191,9 @@ def play_sequence(paths):
     play_sequence呼び出し前に既に保存済みであることが多いため、致命エラー扱いにしない)。
     """
     for path in paths:
+        if path is None:
+            # optional_audio() が見つけられなかったパーツは飛ばす
+            continue
         try:
             subprocess.run(["aplay", "-q", path], check=True)
         except OSError as e:
@@ -208,3 +231,30 @@ def hhmm_to_minutes(hh, mm):
 def now_minutes_of_day(now=None):
     now = now or datetime.now()
     return now.hour * 60 + now.minute
+
+
+def window_length(start_min, end_min):
+    """稼働時間帯の長さ(分)。終了が開始より前なら0時をまたぐ(翌日の終了時刻まで)とみなす。"""
+    return (end_min - start_min) % MINUTES_PER_DAY
+
+
+def window_offset(now_min, start_min):
+    """稼働開始時刻から数えた経過分(0時をまたいでも正の値になる)。"""
+    return (now_min - start_min) % MINUTES_PER_DAY
+
+
+def in_window(now_min, start_min, end_min):
+    """now_min(0時からの分)が稼働時間帯(開始・終了の両端を含む)に入るか。"""
+    return window_offset(now_min, start_min) <= window_length(start_min, end_min)
+
+
+def crosses_midnight(start_min, end_min):
+    return end_min < start_min
+
+
+def resolve_until(now, hh, mm):
+    """「HH:MMまで」を日時にする。今日のHH:MMがnowより後ならそれ、そうでなければ翌日のHH:MM。"""
+    target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return target
