@@ -9,11 +9,16 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIO_DIR = os.path.join(REPO_ROOT, "audio")
 STATE_PATH = os.path.join(REPO_ROOT, "state", "state.json")
+# 停止・鳴動の予約(schedule add で書き、jihou_chime.py が始まりの時刻に適用して消す)
+SCHEDULE_PATH = os.path.join(REPO_ROOT, "state", "schedule.json")
+SCHEDULE_BROKEN_PATH = os.path.join(REPO_ROOT, "state", "schedule.broken.json")
+SCHEDULE_ACTIONS = ("stop", "ring")
+SCHEDULE_ACTION_LABELS = {"stop": "停止", "ring": "鳴動"}
 LOG_PATH = os.path.join(REPO_ROOT, "state", "jihou.log")
 LOCK_PATH = os.path.join(REPO_ROOT, "state", ".state.lock")
 
@@ -151,14 +156,197 @@ def load_state():
 def save_state(state):
     """一時ファイルに書いてから置き換える(電源断等で書き込み途中のファイルが
     残ってstate.jsonが壊れることを防ぐ、os.replaceは同一ファイルシステム内で原子的)。"""
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    tmp_path = STATE_PATH + ".tmp"
+    _write_json_atomic(STATE_PATH, state)
+
+
+def _write_json_atomic(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp_path, STATE_PATH)
+    os.replace(tmp_path, path)
+
+
+def _valid_schedule_entry(entry):
+    """予約1件が {id: 正の整数, start/end: tz無しの日時(start < end), action: stop|ring} か返す。"""
+    if not isinstance(entry, dict):
+        return False
+    if not isinstance(entry.get("id"), int) or isinstance(entry.get("id"), bool) or entry["id"] < 1:
+        return False
+    if entry.get("action") not in SCHEDULE_ACTIONS:
+        return False
+    try:
+        start = datetime.fromisoformat(entry.get("start"))
+        end = datetime.fromisoformat(entry.get("end"))
+    except (TypeError, ValueError):
+        return False
+    if start.tzinfo is not None or end.tzinfo is not None:
+        return False
+    return start < end
+
+
+def load_schedule(repair=True):
+    """予約の一覧(始まりの早い順)を返す。ファイルが無ければ空。
+
+    壊れている(JSONでない・一覧でない・不正な項目がある)ときは空として扱い、ログに書く。
+    repair が真なら、壊れたファイルを schedule.broken.json へ退避する(中身を捨てない)。
+    呼び出し側は state_lock() の中で呼ぶこと。
+    """
+    if not os.path.exists(SCHEDULE_PATH):
+        return []
+    try:
+        with open(SCHEDULE_PATH, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+        if not isinstance(entries, list) or not all(_valid_schedule_entry(e) for e in entries):
+            raise ValueError("schedule.jsonの内容が予約の一覧ではありません")
+        if len({e["id"] for e in entries}) != len(entries):
+            raise ValueError("schedule.jsonに同じ番号の予約があります")
+    except (json.JSONDecodeError, ValueError, OSError) as e:
+        if repair:
+            log(f"警告: schedule.jsonの読み込みに失敗したため、{SCHEDULE_BROKEN_PATH} へ退避して空として扱います({e})")
+            try:
+                os.replace(SCHEDULE_PATH, SCHEDULE_BROKEN_PATH)
+            except OSError as move_error:
+                log(f"警告: schedule.jsonの退避に失敗しました({move_error})")
+        return []
+    return sorted(entries, key=lambda e: e["start"])
+
+
+def save_schedule(entries):
+    _write_json_atomic(SCHEDULE_PATH, sorted(entries, key=lambda e: e["start"]))
+
+
+def apply_pause(state, until):
+    """一時停止を設定する(pause と同じ状態変更)。後から出した指示を優先し、一時オンは取り消す。"""
+    state["paused_until"] = until.isoformat()
+    state["boost_until"] = None
+
+
+def apply_boost(state, until):
+    """一時オンを設定する(boost と同じ状態変更)。後から出した指示を優先し、一時停止は取り消す。"""
+    state["boost_until"] = until.isoformat()
+    state["paused_until"] = None
+
+
+def describe_schedule_entry(entry):
+    start = datetime.fromisoformat(entry["start"])
+    end = datetime.fromisoformat(entry["end"])
+    return (
+        f"#{entry['id']} {SCHEDULE_ACTION_LABELS[entry['action']]} "
+        f"{start.strftime('%Y-%m-%d %H:%M')}〜{end.strftime('%Y-%m-%d %H:%M')}"
+    )
+
+
+def apply_due_schedule(state, entries, now):
+    """始まりの時刻が来た予約を state に適用する(ファイルは書かない)。
+
+    - 始まり <= now < 終わり: 停止なら一時停止、鳴動なら一時オンを「終わりまで」で設定する
+    - 終わり <= now(止まっていて過ぎた予約): 適用しない
+    どちらも一覧から外す。戻り値は (残る予約, 適用した予約, 適用せず外した予約)。
+    """
+    remaining, applied, expired = [], [], []
+    for entry in sorted(entries, key=lambda e: e["start"]):
+        start = datetime.fromisoformat(entry["start"])
+        end = datetime.fromisoformat(entry["end"])
+        if end <= now:
+            expired.append(entry)
+        elif start <= now:
+            if entry["action"] == "stop":
+                apply_pause(state, end)
+            else:
+                apply_boost(state, end)
+            applied.append(entry)
+        else:
+            remaining.append(entry)
+    return remaining, applied, expired
+
+
+def find_overlap(entries, start, end, ignore_id=None):
+    """[start, end) と時間が重なる予約を返す(無ければNone)。終わりと始まりが同じ時刻は重ならない。"""
+    for entry in entries:
+        if entry["id"] == ignore_id:
+            continue
+        other_start = datetime.fromisoformat(entry["start"])
+        other_end = datetime.fromisoformat(entry["end"])
+        if start < other_end and other_start < end:
+            return entry
+    return None
+
+
+def parse_time_spec(value):
+    """予約の時刻の指定を読む。'HH:MM' は ("hhmm", (時, 分))、'YYYY-MM-DDTHH:MM' は ("datetime", 日時)。
+
+    どちらも5分刻み。HH:MM は 24:00〜27:55 も受け付ける(翌日の0:00〜3:55)。
+    """
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", value or ""):
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M")
+        except ValueError:
+            raise ValueError(f"日時は YYYY-MM-DDTHH:MM 形式で指定してください(指定値: {value})") from None
+        if parsed.minute % 5 != 0:
+            raise ValueError(f"時刻は5分刻みで指定してください(指定値: {value})")
+        return "datetime", parsed
+    return "hhmm", parse_hhmm(value)
+
+
+def resolve_schedule_span(now, start_value, end_value):
+    """予約の始まり・終わりの指定を日時にする。
+
+    両方 HH:MM: 終わりは、今より後で最も近いその時刻。始まりは、終わりより前で最も近いその時刻
+      (終わりが始まりより前の指定は0時をまたぐ。始まりが過ぎていて終わりが先なら進行中の予約)
+    両方 YYYY-MM-DDTHH:MM: そのまま使う
+    """
+    start_kind, start = parse_time_spec(start_value)
+    end_kind, end = parse_time_spec(end_value)
+    if start_kind != end_kind:
+        raise ValueError("--start と --end は、両方を HH:MM か、両方を YYYY-MM-DDTHH:MM で指定してください")
+    if start_kind == "hhmm":
+        if start == end:
+            raise ValueError("--start と --end に同じ時刻は指定できません")
+        end_at = resolve_until(now, *end)
+        start_at = end_at.replace(hour=start[0], minute=start[1])
+        if start_at >= end_at:
+            start_at -= timedelta(days=1)
+        return start_at, end_at
+    if start >= end:
+        raise ValueError("--end は --start より後の日時を指定してください")
+    if end <= now:
+        raise ValueError("--end が過ぎています(これから終わる時間を指定してください)")
+    return start, end
+
+
+def retime_schedule_span(now, entry, start_value, end_value):
+    """予約の更新用。指定された側だけを差し替えた (始まり, 終わり) を返す(Noneは変えない)。
+
+    HH:MM は、今の予約の始まりの日付を基準に時刻だけを差し替える(終わりが始まり以前になれば翌日)。
+    YYYY-MM-DDTHH:MM は、その日時をそのまま使う。
+    """
+    start = datetime.fromisoformat(entry["start"])
+    end = datetime.fromisoformat(entry["end"])
+    end_is_clock = end_value is None  # 終わりを時刻として持ち、始まりの日付から決め直すか
+    if start_value is not None:
+        kind, value = parse_time_spec(start_value)
+        start = value if kind == "datetime" else start.replace(hour=value[0], minute=value[1])
+    end_clock = (end.hour, end.minute)
+    if end_value is not None:
+        kind, value = parse_time_spec(end_value)
+        if kind == "datetime":
+            end = value
+        else:
+            end_clock = value
+            end_is_clock = True
+    if end_is_clock and (start_value is not None or end_value is not None):
+        end = start.replace(hour=end_clock[0], minute=end_clock[1])
+        if end <= start:
+            end += timedelta(days=1)
+    if start >= end:
+        raise ValueError("終わりは始まりより後にしてください")
+    if end <= now:
+        raise ValueError("終わりの時刻が過ぎています(これから終わる時間を指定してください)")
+    return start, end
 
 
 def log(message):

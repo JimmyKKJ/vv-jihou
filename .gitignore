@@ -3,4 +3,8 @@ __pycache__/
 *.pyc
 .venv/
 state/state.json
+state/state.json.tmp
+state/schedule.json
+state/schedule.json.tmp
+state/schedule.broken.json
 state/.state.lock

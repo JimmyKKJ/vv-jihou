@@ -2,9 +2,17 @@
 
 VOICEVOX(キャラクター「春日部つむぎ」)で生成した音声パーツを使った、Raspberry Pi向け音声時報システム。
 
-バージョン: **1.2**(`jihou_ctl.py --version`で確認できる)
+バージョン: **1.3**(`jihou_ctl.py --version`で確認できる)
 
 ## 変更履歴
+
+- **1.3**
+  - `schedule`を追加。時間(始まりと終わり)を指定して、時報の停止・鳴動を予約できる
+    (`schedule add --start 10:30 --end 12:00 --action stop`)。始まりの時刻に読み上げなしで実行し、
+    終わりの時刻で元の設定に戻る
+  - 音声「スケジュールを」「追加しました」「更新しました」「削除しました」を追加(予約の操作の読み上げ用)。
+    「変更しました」も入れてあるが、今は使っていない
+  - `status`に予約の一覧を表示する
 
 - **1.2**
   - `late-hours on|off`を追加。オンにすると、0時〜3時台を24時〜27時と読む(時報・操作の読み上げとも)。
@@ -38,11 +46,17 @@ VOICEVOX(キャラクター「春日部つむぎ」)で生成した音声パー�
       v1.1.2で追加: `phrase_made_tomemasu.wav`(「まで止めます」、`pause --until`用)。
       `phrase_made.wav`は今は使っていない(他の読み上げ用に残している)。
       無い場合は、その部分を省いて読み上げる(設定の変更自体は行われる、`state/jihou.log`に警告)
-- `bin/jihou_ctl.py` — オン/オフ・頻度設定・一時停止・一時オン・稼働時間帯設定のCLI(`--help`対応)
-- `bin/jihou_chime.py` — cronから定期実行し、鳴らすべきタイミングか判定して再生する
-- `bin/jihou_common.py` — 共通ユーティリティ(state.json読み書き・音声再生・パス解決)
+    - v1.3で追加(予約の操作の読み上げ用): `phrase_schedule_wo.wav`(「スケジュールを」)・
+      `phrase_tsuika_shimashita.wav`(「追加しました」)・`phrase_koushin_shimashita.wav`(「更新しました」)・
+      `phrase_sakujo_shimashita.wav`(「削除しました」)。無い場合は、その部分を省いて読み上げる。
+      `phrase_henkou_shimashita.wav`(「変更しました」)は今は使っていない(他の読み上げ用に残している)
+- `bin/jihou_ctl.py` — オン/オフ・頻度設定・一時停止・一時オン・稼働時間帯設定・予約のCLI(`--help`対応)
+- `bin/jihou_chime.py` — cronから定期実行し、始まりの時刻が来た予約を適用してから、
+  鳴らすべきタイミングか判定して再生する
+- `bin/jihou_common.py` — 共通ユーティリティ(state.json・schedule.jsonの読み書き・音声再生・パス解決)
 - `state/state.example.json` — 初期設定のテンプレート(実行時に書き換わる`state/state.json`は
   git管理対象外。セットアップ時にこのテンプレートをコピーして使う)
+- `state/schedule.json` — 予約の一覧(git管理対象外。`schedule add`が最初に作るので、用意は要らない)
 - `install/README.md` — Raspberry Pi側のセットアップ手順(venv・cron登録)
 
 ## 時報の仕様
@@ -114,6 +128,35 @@ VOICEVOX(キャラクター「春日部つむぎ」)で生成した音声パー�
   (一時オンで時間帯外に鳴らす分には付けない)
 - 一時オンを設定すると、設定中の一時停止は取り消される
 
+### 予約機能(v1.3)
+
+`jihou_ctl.py schedule add --start <時刻> --end <時刻> --action stop|ring` で、時間を指定して
+時報の停止(`stop`)・鳴動(`ring`)を予約する。
+
+- **実行**: cronで5分ごとに動く`jihou_chime.py`が、始まりの時刻に予約を適用する(読み上げはしない)。
+  適用した予約は一覧から消える
+  - 停止 = `pause --until <終わり>`と同じ。始まりの時刻の時報から止まり、終わりの時刻の時報から鳴る
+    (例: 10:30〜12:00なら、10:30の時報は鳴らず、12:00の時報は鳴る)
+  - 鳴動 = `boost --until <終わり>`と同じ。オフ中・稼働時間帯外・一時停止中でも、始まりの時刻の時報から
+    終わりの時刻の時報まで鳴らす
+  - 終わりの時刻を過ぎると、元の設定(オン/オフ・稼働時間帯)に戻る
+  - 適用した後の操作(`pause`・`boost`・`on`・`off`)は、今までどおり後から出した指示が効く
+    (予約による停止を早く切り上げるなら`on`、予約による鳴動を早く止めるなら`off`か`pause`)
+- **時刻の指定**: `--start`と`--end`は、両方を`HH:MM`(5分刻み、24:00〜27:55も可)か、
+  両方を`YYYY-MM-DDTHH:MM`で指定する
+  - `HH:MM`の場合、終わりは「今より後で最も近いその時刻」、始まりは「終わりより前で最も近いその時刻」。
+    終わりが始まりより前なら0時をまたぐ(`--start 23:00 --end 25:00`は23時〜翌1時)
+  - 始まりが過ぎていて終わりが先の予約(11:00に`--start 10:30 --end 12:00`)は、次の5分刻みの時刻から効く
+  - 他の予約と時間が重なる指定はエラーになる(終わりと始まりが同じ時刻なら重ならない)
+- **更新・削除**: `schedule update --id <番号> [--start] [--end] [--action]`は、指定した項目だけを変える。
+  `HH:MM`は今の予約の始まりの日付のまま時刻だけを差し替え、日付も変えるときは`YYYY-MM-DDTHH:MM`で指定する。
+  `schedule remove --id <番号>`で1件、`schedule clear`で全て削除する。番号は`schedule list`か`status`で見る
+- **読み上げ**: 追加は「スケジュールを追加しました」、更新は「スケジュールを更新しました」、
+  削除は「スケジュールを削除しました」(`list`と、予約が無いときの`clear`は読み上げない)
+- **止まっていた場合**: 機器が止まっていて始まりの時刻を過ぎた予約は、終わりの時刻の前なら次の起動時に適用し、
+  終わりの時刻も過ぎていれば適用せずに消す(どちらも`state/jihou.log`に書く)
+- `state/schedule.json`が壊れていた場合は、`state/schedule.broken.json`へ退避し、予約なしとして扱う
+
 ### 稼働時間帯設定機能
 
 `--start HH:MM --end HH:MM`(5分刻み)で設定変更。終了を開始より前にすると0時をまたぐ
@@ -133,6 +176,12 @@ python bin/jihou_ctl.py window --start 07:00 --end 22:00
 python bin/jihou_ctl.py window --start 06:00 --end 01:00   # 0時をまたぐ
 python bin/jihou_ctl.py late-hours on                     # 0時〜3時台を24時〜27時と読む
 python bin/jihou_ctl.py window --start 06:00 --end 25:00   # 25:00は翌1:00と同じ
+python bin/jihou_ctl.py schedule add --start 10:30 --end 12:00 --action stop   # 10:30〜12:00は止める
+python bin/jihou_ctl.py schedule add --start 23:00 --end 25:00 --action ring   # 23時〜翌1時は鳴らす
+python bin/jihou_ctl.py schedule add --start 2026-11-20T10:30 --end 2026-11-20T12:00 --action stop
+python bin/jihou_ctl.py schedule list
+python bin/jihou_ctl.py schedule update --id 1 --end 12:30
+python bin/jihou_ctl.py schedule remove --id 1
 python bin/jihou_ctl.py status
 python bin/jihou_ctl.py --version
 

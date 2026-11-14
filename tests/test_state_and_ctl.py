@@ -310,5 +310,260 @@ class ControlTests(unittest.TestCase):
         save_state.assert_called_once_with(state)
 
 
+def make_entry(entry_id, start, end, action="stop"):
+    return {"id": entry_id, "start": start, "end": end, "action": action, "created_at": "2026-11-14T09:00:00"}
+
+
+class ScheduleSpanTests(unittest.TestCase):
+    def test_hhmm_future_today(self):
+        self.assertEqual(
+            jihou_common.resolve_schedule_span(at("2026-11-14T09:00:00"), "10:30", "12:00"),
+            (at("2026-11-14T10:30"), at("2026-11-14T12:00")),
+        )
+
+    def test_hhmm_in_progress_starts_today(self):
+        self.assertEqual(
+            jihou_common.resolve_schedule_span(at("2026-11-14T11:00:00"), "10:30", "12:00"),
+            (at("2026-11-14T10:30"), at("2026-11-14T12:00")),
+        )
+
+    def test_hhmm_past_goes_to_tomorrow(self):
+        self.assertEqual(
+            jihou_common.resolve_schedule_span(at("2026-11-14T13:00:00"), "10:30", "12:00"),
+            (at("2026-11-15T10:30"), at("2026-11-15T12:00")),
+        )
+
+    def test_hhmm_crosses_midnight(self):
+        self.assertEqual(
+            jihou_common.resolve_schedule_span(at("2026-11-14T20:00:00"), "23:00", "25:00"),
+            (at("2026-11-14T23:00"), at("2026-11-15T01:00")),
+        )
+
+    def test_datetime_span(self):
+        self.assertEqual(
+            jihou_common.resolve_schedule_span(at("2026-11-14T09:00:00"), "2026-11-20T10:30", "2026-11-20T12:00"),
+            (at("2026-11-20T10:30"), at("2026-11-20T12:00")),
+        )
+
+    def test_rejects_invalid_spans(self):
+        now = at("2026-11-14T09:00:00")
+        for start, end in (
+            ("10:30", "10:30"),  # 同じ時刻
+            ("10:30", "2026-11-14T12:00"),  # 形式の混在
+            ("2026-11-14T12:00", "2026-11-14T10:30"),  # 終わりが先
+            ("2026-11-13T10:30", "2026-11-13T12:00"),  # 終わりが過ぎている
+            ("10:31", "12:00"),  # 5分刻みでない
+            ("2026-11-14T10:31", "2026-11-14T12:00"),
+        ):
+            with self.subTest(start=start, end=end), self.assertRaises(ValueError):
+                jihou_common.resolve_schedule_span(now, start, end)
+
+    def test_retime_keeps_date_and_changes_only_given_side(self):
+        entry = make_entry(1, "2026-11-20T10:30:00", "2026-11-20T12:00:00")
+        now = at("2026-11-14T09:00:00")
+        self.assertEqual(
+            jihou_common.retime_schedule_span(now, entry, None, "12:30"),
+            (at("2026-11-20T10:30"), at("2026-11-20T12:30")),
+        )
+        self.assertEqual(
+            jihou_common.retime_schedule_span(now, entry, "23:00", "01:00"),
+            (at("2026-11-20T23:00"), at("2026-11-21T01:00")),
+        )
+        self.assertEqual(
+            jihou_common.retime_schedule_span(now, entry, None, None),
+            (at("2026-11-20T10:30"), at("2026-11-20T12:00")),
+        )
+        self.assertEqual(
+            jihou_common.retime_schedule_span(now, entry, "2026-11-21T10:30", None),
+            (at("2026-11-21T10:30"), at("2026-11-21T12:00")),
+        )
+
+    def test_find_overlap_treats_touching_spans_as_separate(self):
+        entries = [make_entry(1, "2026-11-14T10:30:00", "2026-11-14T12:00:00")]
+        self.assertIsNone(jihou_common.find_overlap(entries, at("2026-11-14T12:00"), at("2026-11-14T13:00")))
+        self.assertIsNotNone(jihou_common.find_overlap(entries, at("2026-11-14T11:55"), at("2026-11-14T13:00")))
+        self.assertIsNone(
+            jihou_common.find_overlap(entries, at("2026-11-14T11:00"), at("2026-11-14T13:00"), ignore_id=1)
+        )
+
+
+class ScheduleApplyTests(unittest.TestCase):
+    def test_stop_silences_from_start_and_resumes_at_end(self):
+        state = make_state()
+        entries = [make_entry(1, "2026-11-14T10:30:00", "2026-11-14T12:00:00")]
+
+        # 始まりの前は、適用されず鳴る
+        remaining, applied, expired = jihou_common.apply_due_schedule(state, entries, at("2026-11-14T10:15:02"))
+        self.assertEqual((len(remaining), applied, expired), (1, [], []))
+        self.assertTrue(jihou_chime.decide(at("2026-11-14T10:15:02"), state)["ring"])
+
+        # 始まりの時刻の時報から止まる
+        remaining, applied, expired = jihou_common.apply_due_schedule(state, entries, at("2026-11-14T10:30:02"))
+        self.assertEqual((remaining, len(applied), expired), ([], 1, []))
+        self.assertEqual(state["paused_until"], "2026-11-14T12:00:00")
+        self.assertFalse(jihou_chime.decide(at("2026-11-14T10:30:02"), state)["ring"])
+        self.assertFalse(jihou_chime.decide(at("2026-11-14T11:45:02"), state)["ring"])
+
+        # 終わりの時刻の時報から鳴る
+        self.assertTrue(jihou_chime.decide(at("2026-11-14T12:00:02"), state)["ring"])
+
+    def test_ring_rings_when_off_until_end_chime(self):
+        state = make_state(enabled=False)
+        entries = [make_entry(1, "2026-11-14T23:30:00", "2026-11-15T01:00:00", "ring")]
+        jihou_common.apply_due_schedule(state, entries, at("2026-11-14T23:30:02"))
+        self.assertEqual(state["boost_until"], "2026-11-15T01:00:00")
+        self.assertTrue(jihou_chime.decide(at("2026-11-14T23:30:02"), state)["ring"])
+        self.assertTrue(jihou_chime.decide(at("2026-11-15T01:00:02"), state)["ring"])
+        self.assertFalse(jihou_chime.decide(at("2026-11-15T01:15:02"), state)["ring"])
+
+    def test_stop_cancels_boost_and_ring_cancels_pause(self):
+        state = make_state(boost_until="2026-11-14T23:00:00")
+        jihou_common.apply_due_schedule(
+            state, [make_entry(1, "2026-11-14T10:30:00", "2026-11-14T12:00:00")], at("2026-11-14T10:30:00")
+        )
+        self.assertIsNone(state["boost_until"])
+        jihou_common.apply_due_schedule(
+            state, [make_entry(2, "2026-11-14T11:00:00", "2026-11-14T11:30:00", "ring")], at("2026-11-14T11:00:00")
+        )
+        self.assertIsNone(state["paused_until"])
+
+    def test_missed_entry_is_dropped_without_applying(self):
+        state = make_state()
+        entries = [
+            make_entry(1, "2026-11-14T10:30:00", "2026-11-14T12:00:00"),
+            make_entry(2, "2026-11-14T15:00:00", "2026-11-14T16:00:00"),
+        ]
+        remaining, applied, expired = jihou_common.apply_due_schedule(state, entries, at("2026-11-14T12:00:02"))
+        self.assertEqual([e["id"] for e in remaining], [2])
+        self.assertEqual(applied, [])
+        self.assertEqual([e["id"] for e in expired], [1])
+        self.assertIsNone(state["paused_until"])
+
+    def test_in_progress_entry_is_applied_late(self):
+        state = make_state()
+        entries = [make_entry(1, "2026-11-14T10:30:00", "2026-11-14T12:00:00")]
+        _, applied, _ = jihou_common.apply_due_schedule(state, entries, at("2026-11-14T11:20:02"))
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(state["paused_until"], "2026-11-14T12:00:00")
+
+
+class ScheduleFileTests(unittest.TestCase):
+    """schedule.json を一時ディレクトリに置いて、読み書きとCLIを確かめる。"""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.schedule_path = Path(self.tmp.name) / "schedule.json"
+        self.broken_path = Path(self.tmp.name) / "schedule.broken.json"
+        for name, value in (
+            ("SCHEDULE_PATH", str(self.schedule_path)),
+            ("SCHEDULE_BROKEN_PATH", str(self.broken_path)),
+        ):
+            patcher = patch.object(jihou_common, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_schedule(self, func, args, now):
+        with (
+            patch.object(jihou_ctl, "log"),
+            patch.object(jihou_ctl, "optional_audio", side_effect=lambda *p: "/".join(p)),
+            patch.object(jihou_ctl, "play_sequence") as play_sequence,
+            patch.object(jihou_ctl, "datetime") as fake_datetime,
+            patch("builtins.print"),
+        ):
+            fake_datetime.now.return_value = now
+            fake_datetime.fromisoformat.side_effect = datetime.fromisoformat
+            func(args)
+        return play_sequence
+
+    def test_missing_file_is_empty(self):
+        self.assertEqual(jihou_common.load_schedule(), [])
+        self.assertFalse(self.schedule_path.exists())
+
+    def test_broken_file_is_moved_aside(self):
+        self.schedule_path.write_text('[{"id": 1, "start": "x"}]', encoding="utf-8")
+        with patch.object(jihou_common, "log"):
+            self.assertEqual(jihou_common.load_schedule(repair=False), [])
+            self.assertTrue(self.schedule_path.exists())
+            self.assertEqual(jihou_common.load_schedule(), [])
+        self.assertFalse(self.schedule_path.exists())
+        self.assertTrue(self.broken_path.exists())
+
+    def test_add_update_remove_read_their_voices(self):
+        now = at("2026-11-14T09:00:00")
+        play = self.run_schedule(
+            jihou_ctl.cmd_schedule_add, Namespace(start="10:30", end="12:00", action="stop"), now
+        )
+        self.assertEqual(play.call_args[0][0], ["system/phrase_schedule_wo.wav", "system/phrase_tsuika_shimashita.wav"])
+        entries = jihou_common.load_schedule()
+        self.assertEqual(
+            [(e["id"], e["start"], e["end"], e["action"]) for e in entries],
+            [(1, "2026-11-14T10:30:00", "2026-11-14T12:00:00", "stop")],
+        )
+
+        play = self.run_schedule(
+            jihou_ctl.cmd_schedule_update, Namespace(id=1, start=None, end="12:30", action="ring"), now
+        )
+        self.assertEqual(play.call_args[0][0][1], "system/phrase_koushin_shimashita.wav")
+        entry = jihou_common.load_schedule()[0]
+        self.assertEqual((entry["end"], entry["action"]), ("2026-11-14T12:30:00", "ring"))
+
+        play = self.run_schedule(jihou_ctl.cmd_schedule_remove, Namespace(id=1), now)
+        self.assertEqual(play.call_args[0][0][1], "system/phrase_sakujo_shimashita.wav")
+        self.assertEqual(jihou_common.load_schedule(), [])
+
+    def test_add_rejects_overlap_and_numbers_sequentially(self):
+        now = at("2026-11-14T09:00:00")
+        self.run_schedule(jihou_ctl.cmd_schedule_add, Namespace(start="10:30", end="12:00", action="stop"), now)
+        with self.assertRaises(SystemExit), patch("sys.stderr"):
+            self.run_schedule(jihou_ctl.cmd_schedule_add, Namespace(start="11:00", end="13:00", action="ring"), now)
+        self.run_schedule(jihou_ctl.cmd_schedule_add, Namespace(start="12:00", end="13:00", action="ring"), now)
+        self.assertEqual([e["id"] for e in jihou_common.load_schedule()], [1, 2])
+
+    def test_update_and_remove_reject_unknown_id(self):
+        now = at("2026-11-14T09:00:00")
+        for func, args in (
+            (jihou_ctl.cmd_schedule_update, Namespace(id=9, start=None, end="12:30", action=None)),
+            (jihou_ctl.cmd_schedule_remove, Namespace(id=9)),
+        ):
+            with self.subTest(func=func.__name__), self.assertRaises(SystemExit), patch("sys.stderr"):
+                self.run_schedule(func, args, now)
+
+    def test_clear_is_silent_when_empty(self):
+        now = at("2026-11-14T09:00:00")
+        play = self.run_schedule(jihou_ctl.cmd_schedule_clear, Namespace(), now)
+        play.assert_not_called()
+        self.run_schedule(jihou_ctl.cmd_schedule_add, Namespace(start="10:30", end="12:00", action="stop"), now)
+        play = self.run_schedule(jihou_ctl.cmd_schedule_clear, Namespace(), now)
+        self.assertEqual(play.call_args[0][0][1], "system/phrase_sakujo_shimashita.wav")
+        self.assertEqual(jihou_common.load_schedule(), [])
+
+    def test_chime_applies_and_removes_due_entry(self):
+        jihou_common.save_schedule([make_entry(1, "2026-11-14T10:30:00", "2026-11-14T12:00:00")])
+        state = make_state()
+        with (
+            patch.object(jihou_chime, "save_state") as save_state,
+            patch.object(jihou_chime, "log"),
+        ):
+            jihou_chime.run_schedule(at("2026-11-14T10:30:02"), state, False)
+        save_state.assert_called_once_with(state)
+        self.assertEqual(state["paused_until"], "2026-11-14T12:00:00")
+        self.assertEqual(jihou_common.load_schedule(), [])
+
+    def test_chime_simulation_does_not_write(self):
+        jihou_common.save_schedule([make_entry(1, "2026-11-14T10:30:00", "2026-11-14T12:00:00")])
+        state = make_state()
+        with (
+            patch.object(jihou_chime, "save_state") as save_state,
+            patch.object(jihou_chime, "log"),
+        ):
+            jihou_chime.run_schedule(at("2026-11-14T10:30:02"), state, True)
+        save_state.assert_not_called()
+        self.assertEqual(state["paused_until"], "2026-11-14T12:00:00")
+        self.assertEqual(len(jihou_common.load_schedule()), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
