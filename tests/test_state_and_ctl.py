@@ -99,6 +99,24 @@ class DecideTests(unittest.TestCase):
         self.assertTrue(night["night"])
         self.assertFalse(jihou_chime.decide(at("2026-10-16T23:00"), state)["night"])
 
+    def test_interval_20_minutes_rings_every_20_minutes(self):
+        state = make_state(interval_minutes=20)
+        self.assertIn(20, jihou_common.ALLOWED_INTERVAL_MINUTES)
+        for ok in ("2026-11-14T07:00", "2026-11-14T07:20", "2026-11-14T07:40", "2026-11-14T12:00"):
+            self.assertTrue(jihou_chime.decide(at(ok), state)["ring"], ok)
+        for ng in ("2026-11-14T07:05", "2026-11-14T07:10", "2026-11-14T07:15", "2026-11-14T07:30"):
+            self.assertFalse(jihou_chime.decide(at(ng), state)["ring"], ng)
+
+    def test_interval_20_minutes_greetings_at_first_and_last_tick(self):
+        state = make_state(interval_minutes=20)
+        self.assertFalse(jihou_chime.decide(at("2026-11-14T06:20"), state)["ring"])
+        first = jihou_chime.decide(at("2026-11-14T06:40"), state)
+        self.assertTrue(first["ring"])
+        self.assertTrue(first["morning"])
+        last = jihou_chime.decide(at("2026-11-14T23:00"), state)
+        self.assertTrue(last["night"])
+        self.assertFalse(jihou_chime.decide(at("2026-11-14T22:40"), state)["night"])
+
     def test_same_day_greetings_unchanged(self):
         state = make_state()
         self.assertTrue(jihou_chime.decide(at("2026-10-16T06:30"), state)["morning"])
