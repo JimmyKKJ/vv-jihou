@@ -9,7 +9,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-__version__ = "1.3"
+__version__ = "1.4"
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AUDIO_DIR = os.path.join(REPO_ROOT, "audio")
@@ -40,7 +40,7 @@ LATE_HOURS_LAST = 3
 MINUTES_PER_DAY = 24 * 60
 
 # 頻度設定・一時停止で選べる値(録音済みの音声パーツに対応するもののみ)
-ALLOWED_INTERVAL_MINUTES = [5, 10, 15, 30]
+ALLOWED_INTERVAL_MINUTES = [5, 10, 15, 20, 30]
 ALLOWED_INTERVAL_HOURS = [1, 2, 3, 6, 12]
 ALLOWED_PAUSE_HOURS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 24, 48]
 

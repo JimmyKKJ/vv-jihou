@@ -4,13 +4,13 @@
 使い方:
   jihou_ctl.py on
   jihou_ctl.py off
-  jihou_ctl.py interval --minutes 5|10|15|30
+  jihou_ctl.py interval --minutes 5|10|15|20|30
   jihou_ctl.py interval --hours 1|2|3|6|12
-  jihou_ctl.py pause --minutes 5|10|15|30
+  jihou_ctl.py pause --minutes 5|10|15|20|30
   jihou_ctl.py pause --hours 1〜12|24|48
   jihou_ctl.py pause --until HH:MM   (5分刻み、HH:MMの時報から再開。過ぎた時刻なら翌日)
   jihou_ctl.py pause --allday
-  jihou_ctl.py boost --minutes 5|10|15|30
+  jihou_ctl.py boost --minutes 5|10|15|20|30
   jihou_ctl.py boost --hours 1〜12|24|48
   jihou_ctl.py boost --until HH:MM   (5分刻み、HH:MMの時報まで鳴らす。過ぎた時刻なら翌日)
   jihou_ctl.py window --start HH:MM --end HH:MM (5分刻み、終了が開始より前なら0時をまたぐ)
