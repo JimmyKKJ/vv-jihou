@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """cronから定期的(*/5 * * * * 推奨)に起動し、鳴らすべきタイミングであれば音声を再生する。
 
+鳴らすかを決める前に、始まりの時刻が来た予約(jihou_ctl.py schedule add)を適用する。
+
 使い方:
   jihou_chime.py            現在時刻で判定して鳴らす(cron用)
   jihou_chime.py --at HH:MM 指定時刻で判定して鳴らす(動作確認用、日付は今日扱い)
@@ -17,13 +19,17 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
 from jihou_common import (
     __version__,
+    apply_due_schedule,
     audio_path,
+    describe_schedule_entry,
     hhmm_to_minutes,
     in_window,
+    load_schedule,
     load_state,
     log,
     play_error,
     play_sequence,
+    save_schedule,
     save_state,
     spoken_hour,
     state_lock,
@@ -133,6 +139,28 @@ def decide(now, state):
     return result
 
 
+def run_schedule(now, state, is_simulation):
+    """始まりの時刻が来た予約(schedule add)を state に適用する。state_lock() の中で呼ぶ。
+
+    読み上げはしない(授業の開始など、音を出したくない時刻に実行されるため)。
+    シミュレーション(--at)では、state は手元の値だけを変え、ファイルは書き換えない。
+    予約の処理に失敗しても、時報そのものは止めない(ログに書いて続ける)。
+    """
+    try:
+        entries = load_schedule(repair=not is_simulation)
+        remaining, applied, expired = apply_due_schedule(state, entries, now)
+        if is_simulation or not (applied or expired):
+            return
+        save_state(state)
+        save_schedule(remaining)
+        for entry in applied:
+            log(f"schedule: {describe_schedule_entry(entry)} を適用")
+        for entry in expired:
+            log(f"schedule: {describe_schedule_entry(entry)} は終わりの時刻を過ぎていたため、適用せず削除")
+    except Exception as e:  # noqa: BLE001 — 予約の不具合で時報を止めない
+        log(f"エラー: 予約の処理に失敗しました({e})")
+
+
 def build_sequence(now, state):
     hour, minute = now.hour, now.minute
     late_hours = state.get("late_hours", False)
@@ -187,6 +215,7 @@ def main():
         # 読み込み〜(必要なら)期限切れのpaused_until/boost_untilクリアの保存までをロックで囲む。
         with state_lock():
             state = load_state()
+            run_schedule(now, state, is_simulation)
             decision = decide(now, state)
             if decision["clear"] and not is_simulation:
                 for key in decision["clear"]:
